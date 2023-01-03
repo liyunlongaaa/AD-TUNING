@@ -90,7 +90,8 @@ def get_SubnetAdamW(model_params, lr=2e-4, **kwargs):
     params = []
     for m in model_params:
         params += list(m.parameters())
-    optimizer = SubnetAdamW(params, lr=lr)
+    kwargs.pop('total_steps')
+    optimizer = SubnetAdamW(params, lr=lr, **kwargs)
     return optimizer
 
 def get_TorchOptim(model_params, torch_optim_name, **kwargs):
@@ -98,7 +99,6 @@ def get_TorchOptim(model_params, torch_optim_name, **kwargs):
     for m in model_params:
         params += list(m.parameters())
     Opt_class = getattr(torch.optim, torch_optim_name)
-
     kwargs.pop('total_steps')
     optim = Opt_class(params, **kwargs)
     return optim
@@ -131,7 +131,7 @@ class SubnetAdamW(Optimizer):
         weight_decay: float = 0.0,
         correct_bias: bool = True,
         reserve_p = 1.0,
-        tuning_mode = None
+        tuning_mode = 'subnet'
     ):
         if lr < 0.0:
             raise ValueError("Invalid learning rate: {} - should be >= 0.0".format(lr))
@@ -147,6 +147,7 @@ class SubnetAdamW(Optimizer):
         self.gradient_mask = None
         self.reserve_p = reserve_p
         self.tuning_mode = tuning_mode
+        print(f"lr = {lr}, reserve_p = {reserve_p}, tuning_mode = {tuning_mode}")
 
     def set_grad_mask(self, grad_mask):
         self.grad_mask = grad_mask
@@ -174,10 +175,12 @@ class SubnetAdamW(Optimizer):
                     if self.tuning_mode == 'subnet':
                         if p in self.grad_mask:
                             grad *= self.grad_mask[p]
-                    else: 
+                    else:
                         # grad_mask = Bernoulli(grad.new_full(size=grad.size(), fill_value=self.reserve_p))
                         # grad *= grad_mask.sample() / self.reserve_p
                         raise("not implement !!!")
+                else: 
+                    raise("not implement !!!")
                 # =================== HACK END =======================
 
                 state = self.state[p]

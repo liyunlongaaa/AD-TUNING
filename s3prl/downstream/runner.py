@@ -360,8 +360,7 @@ class Runner():
         # =================== HACK BEGIN =======================   
         #get_fisher_mask & set mask
         if self.args.tuning_mode == "subnet":
-            reserve_p = self.config['subnet']['reserve_p']
-            print(f'[Runner] - Here is Subnet Tuning, reserve_p is {reserve_p}')
+            print(f'[Runner] - Here is Subnet Tuning')
             grad_mask = self.get_fisher_mask()
             optimizer.set_grad_mask(grad_mask)
             if self.upstream.trainable:
