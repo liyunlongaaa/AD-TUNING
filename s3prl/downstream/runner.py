@@ -241,14 +241,20 @@ class Runner():
         
         for name, params in self.upstream.model.named_parameters():
             #print(name)
+            if 'final_proj' in name:
+                continue
             pcount += params.numel()
-            if 'encoder.layers' in name:        
+            if 'encoder' or 'layer_norm' in name:
                 print("encoder : ", name)
                 grad_mask[params] = params.new_zeros(params.size())
                 tuning_pcount += params.numel()
-            elif 'final_proj' in name:
-                print("final_proj : ", name)
-                tuning_pcount += params.numel()
+            # if 'encoder.layers' in name:        
+            #     print("encoder : ", name)
+            #     grad_mask[params] = params.new_zeros(params.size())
+            #     tuning_pcount += params.numel()
+            # elif 'final_proj' in name:
+            #     print("final_proj : ", name)
+            #     tuning_pcount += params.numel()
             else:
                 print('frozen: ', name)      ###layer_norm.weight 冻住是否会有影响
                 params.requires_grad = False
