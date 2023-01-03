@@ -232,21 +232,32 @@ class Runner():
         for entry in self.all_entries:
             entry.model.train()
         tuning_pcount = 0
-
+        pcount = 0
         # specaug
         specaug = None
         if self.config.get('specaug'):
             from .specaug import SpecAug
             specaug = SpecAug(**self.config["specaug"])
-
+        
         for name, params in self.upstream.model.named_parameters():
-            if 'encoder.layers' in name:        ###
-                print(name, "will be cal")
+            #print(name)
+            pcount += params.numel()
+            if 'encoder.layers' in name:        
+                print("encoder : ", name)
                 grad_mask[params] = params.new_zeros(params.size())
                 tuning_pcount += params.numel()
-
+            elif 'final_proj' in name:
+                print("final_proj : ", name)
+                tuning_pcount += params.numel()
+            else:
+                print('frozen: ', name)      ###layer_norm.weight 冻住是否会有影响
+                params.requires_grad = False
+        
         tuning_pcount *= self.config['optimizer']['reserve_p']
+
         print(f'num of tuning params: {tuning_pcount / 1e6} M')
+        print(f'num of total params: {pcount / 1e6} M')
+        
         # Now begin
         train_split = self.config['runner'].get("train_dataloader", "train")
         train_dataloader = self.downstream.model.get_dataloader(train_split)
@@ -305,7 +316,7 @@ class Runner():
                 r = v
             else:
                 r = np.append(r, v)
-        polar = np.percentile(r, (1-self.config['subnet']['reserve_p'])*100)
+        polar = np.percentile(r, (1-self.config['optimizer']['reserve_p'])*100)
         for k in grad_mask:
             grad_mask[k] = grad_mask[k] >= polar
         print('Polar => {}'.format(polar))
@@ -365,6 +376,11 @@ class Runner():
             optimizer.set_grad_mask(grad_mask)
             if self.upstream.trainable:
                 print("upstream is tuning")
+            tcont = 0
+            for name, params in self.upstream.model.named_parameters():
+                if params.requires_grad == True:
+                    tcont += params.numel()
+            print(f'-------------------tcont = {tcont}-----------------------------')
         # =================== HACK END =======================  
 
         while pbar.n < pbar.total:
