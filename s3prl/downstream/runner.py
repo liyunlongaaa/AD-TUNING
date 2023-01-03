@@ -223,6 +223,96 @@ class Runner():
         with open(os.path.join(path, "README.md"), "w") as f:
             f.write(model_card)
 
+    def get_fisher_mask(self):
+        grad_mask = dict()
+        #self.upstream.model.train()
+
+        records = defaultdict(list)
+
+        for entry in self.all_entries:
+            entry.model.train()
+        tuning_pcount = 0
+
+        # specaug
+        specaug = None
+        if self.config.get('specaug'):
+            from .specaug import SpecAug
+            specaug = SpecAug(**self.config["specaug"])
+
+        for name, params in self.upstream.model.named_parameters():
+            if 'encoder.layers' in name:        ###
+                print(name, "will be cal")
+                grad_mask[params] = params.new_zeros(params.size())
+                tuning_pcount += params.numel()
+
+        tuning_pcount *= self.config['subnet']['reserve_p']
+        print(f'num of tuning params: {tuning_pcount / 1e6} M')
+        # Now begin
+        train_split = self.config['runner'].get("train_dataloader", "train")
+        train_dataloader = self.downstream.model.get_dataloader(train_split)
+        
+        N = len(train_dataloader)
+
+        tqdm_file = sys.stderr if is_leader_process() else open(os.devnull, 'w')   #如果 is_leader_process() 返回 True，则进度条将显示在命令行中，否则，进度条将被忽略。
+        for batch_id, (wavs, *others) in enumerate(tqdm(train_dataloader, dynamic_ncols=True, desc='get_fisher', file=tqdm_file)):
+            try:
+                wavs = [torch.FloatTensor(wav).to(self.args.device) for wav in wavs]
+
+                features = self.upstream.model(wavs)
+                features = self.featurizer.model(wavs, features)
+
+                if specaug:
+                    features, _ = specaug(features)
+
+                loss = self.downstream.model(
+                    train_split,
+                    features, *others,
+                    records = records,
+                )
+
+                gradient_accumulate_steps = self.config['runner'].get('gradient_accumulate_steps')
+                (loss / gradient_accumulate_steps).backward()
+
+                for name, params in self.upstream.model.named_parameters():
+                    if 'encoder.layers' in name:
+                        torch.nn.utils.clip_grad_norm_(params, self.config['runner']['gradient_clipping'])
+                        grad_mask[params] += (params.grad ** 2) / N               #累计梯度
+
+                self.upstream.model.zero_grad()         
+                # for entry in self.all_entries:
+                #     entry.model.zero_grad()
+                del loss
+            except RuntimeError as e:
+                    if 'CUDA out of memory' in str(e):
+                        print(f'[Runner] - CUDA out of memory at step {batch_id}')
+                        if is_initialized():
+                            raise
+                        with torch.cuda.device(self.args.device):
+                            torch.cuda.empty_cache()
+                        self.upstream.model.zero_grad()  
+                        # for entry in self.all_entries:
+                        #     entry.model.zero_grad()
+                        continue
+                    else:
+                        raise
+        print('Calculate Fisher Information')
+
+        # Numpy
+        r = None
+        for k, v in grad_mask.items():
+            v = v.view(-1).cpu().numpy()
+            if r is None:
+                r = v
+            else:
+                r = np.append(r, v)
+        polar = np.percentile(r, (1-self.config['subnet']['reserve_p'])*100)
+        for k in grad_mask:
+            grad_mask[k] = grad_mask[k] >= polar
+        print('Polar => {}'.format(polar))
+
+        # TODO: pytorch: torch.kthvalue
+        
+        return grad_mask
 
     def train(self):
         # trainable parameters and train/eval mode
@@ -260,12 +350,24 @@ class Runner():
         # Tensorboard logging
         if is_leader_process():
             logger = SummaryWriter(self.args.expdir)
-
+        
         batch_ids = []
         backward_steps = 0
         records = defaultdict(list)
         epoch = self.init_ckpt.get('Epoch', 0)
         train_split = self.config['runner'].get("train_dataloader", "train")
+
+        # =================== HACK BEGIN =======================   
+        #get_fisher_mask & set mask
+        if self.args.tuning_mode == "subnet":
+            reserve_p = self.config['subnet']['reserve_p']
+            print(f'[Runner] - Here is Subnet Tuning, reserve_p is {reserve_p}')
+            grad_mask = self.get_fisher_mask()
+            optimizer.set_grad_mask(grad_mask)
+            if self.upstream.trainable:
+                print("upstream is tuning")
+        # =================== HACK END =======================  
+
         while pbar.n < pbar.total:
             try:
                 dataloader = self.downstream.model.get_dataloader(train_split, epoch=epoch)
