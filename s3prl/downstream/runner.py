@@ -245,7 +245,7 @@ class Runner():
                 grad_mask[params] = params.new_zeros(params.size())
                 tuning_pcount += params.numel()
 
-        tuning_pcount *= self.config['subnet']['reserve_p']
+        tuning_pcount *= self.config['optimizer']['reserve_p']
         print(f'num of tuning params: {tuning_pcount / 1e6} M')
         # Now begin
         train_split = self.config['runner'].get("train_dataloader", "train")
