@@ -240,20 +240,13 @@ class Runner():
             specaug = SpecAug(**self.config["specaug"])
         
         for name, params in self.upstream.model.named_parameters():
-            
-            if 'encoder' in name or 'layer_norm' in name:
-                print("encoder or layer_norm : ", name)
+
+            if 'encoder.layers' in name or 'layer_norm' in name:
+                print("encoder.layers or layer_norm : ", name)
                 grad_mask[params] = params.new_zeros(params.size())
                 tuning_pcount += params.numel()
-            # if 'encoder.layers' in name:        
-            #     print("encoder : ", name)
-            #     grad_mask[params] = params.new_zeros(params.size())
-            #     tuning_pcount += params.numel()
-            # elif 'final_proj' in name:
-            #     print("final_proj : ", name)
-            #     tuning_pcount += params.numel()
             else:
-                print('frozen: ', name)      ###layer_norm.weight 冻住是否会有影响
+                print('frozen: ', name)      
                 params.requires_grad = False
 
             if 'final_proj'  not in name:
