@@ -375,12 +375,12 @@ class Runner():
             optimizer.set_grad_mask(grad_mask)
             if self.upstream.trainable:
                 print("upstream is tuning")
-            tcont = 0
-            for name, params in self.upstream.model.named_parameters():
-                if params.requires_grad == True:
-                    tcont += params.numel()
-            print(f'-------------------tcont = {tcont}-----------------------------')
-        # =================== HACK END =======================  
+            # tcont = 0
+            # for name, params in self.upstream.model.named_parameters():
+            #     if params.requires_grad == True:
+            #         tcont += params.numel()
+            # print(f'-------------------tcont = {tcont}-----------------------------')
+        # =================== HACK END =========================  
 
         while pbar.n < pbar.total:
             try:

@@ -47,6 +47,7 @@ class DownstreamExpert(nn.Module):
         self.objective = nn.CrossEntropyLoss()
         self.expdir = expdir
         self.register_buffer('best_score', torch.zeros(1))
+        self.register_buffer('best_test_score', torch.zeros(1))  ###
 
     def _get_balanced_train_dataloader(self, dataset, drop_last=False):
         sampler = WeightedRandomSampler(dataset.sample_weights, len(dataset.sample_weights))
@@ -134,7 +135,13 @@ class DownstreamExpert(nn.Module):
                         self.best_score = torch.ones(1) * average
                         f.write(f'New best on {mode} at step {global_step}: {average}\n')
                         save_names.append(f'{mode}-best.ckpt')
-
+                    # =================== HACK BEGIN =======================
+                    #save best test model
+                    if mode == 'test' and average > self.best_test_score:
+                        self.best_test_score = torch.ones(1) * average
+                        f.write(f'New best on {mode} at step {global_step}: {average}\n')
+                        save_names.append(f'{mode}-best.ckpt')
+                    # =================== HACK BEGIN =======================
         with open(Path(self.expdir) / f"{mode}_predict.txt", "w") as file:
             lines = [f"{f} {i}\n" for f, i in zip(records["filename"], records["predict"])]
             file.writelines(lines)
