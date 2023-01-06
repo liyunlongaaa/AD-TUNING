@@ -144,7 +144,7 @@ class SubnetAdamW(Optimizer):
         defaults = dict(lr=lr, betas=betas, eps=eps, weight_decay=weight_decay, correct_bias=correct_bias)
         super().__init__(params, defaults)
 
-        self.gradient_mask = None
+        self.grad_mask = None
         self.reserve_p = reserve_p
         self.tuning_mode = tuning_mode
         print(f"lr = {lr}, reserve_p = {reserve_p}, tuning_mode = {tuning_mode}")
