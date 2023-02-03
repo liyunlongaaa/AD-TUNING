@@ -61,7 +61,6 @@ class SpeakerVerifi_train(Dataset):
             for path, length in zip(wav_paths, wav_lengths):
                 if length > self.vad_c['min_sec']:
                     self.dataset.append(path)
-
         self.all_speakers.sort()
         self.speaker_num = len(self.all_speakers)
 

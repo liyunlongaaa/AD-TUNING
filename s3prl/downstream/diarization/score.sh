@@ -20,7 +20,7 @@ scoring_dir="$1/scoring"
 infer_dir="${scoring_dir}/predictions"
 test_set="$2"
 # directory where you cloned dscore (https://github.com/ftshijt/dscore)
-dscore_dir=/groups/leo1994122701/dscore
+dscore_dir=/home/yoos/Documents/code/dscore
 
 frame_shift_file=$1/frame_shift
 if [ -f $frame_shift_file ]; then

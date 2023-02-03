@@ -28,8 +28,10 @@ def create_length_mask(length, max_len, num_output, device):
 # compute loss for a single permutation
 def pit_loss_single_permute(output, label, length):
     bce_loss = torch.nn.BCEWithLogitsLoss(reduction="none")
-    mask = create_length_mask(length, label.size(1), label.size(2), label.device)
-    loss = bce_loss(output, label)
+    mask = create_length_mask(length, label.size(1), label.size(2), label.device) #（b,t,2）因为可能同时说话，所以是一个多标签问题【1，1】表示同时
+    #print(mask.shape)
+    loss = bce_loss(output, label)   #（b,t,2）
+    #print(loss.shape)
     loss = loss * mask
     loss = torch.sum(torch.mean(loss, dim=2), dim=1)
     loss = torch.unsqueeze(loss, dim=1)
@@ -40,13 +42,17 @@ def pit_loss(output, label, length):
     num_output = label.size(2)
     device = label.device
     permute_list = [np.array(p) for p in permutations(range(num_output))]
+    #print("permute_list",permute_list)
     loss_list = []
     for p in permute_list:
         label_perm = label[:, :, p]
-        loss_perm = pit_loss_single_permute(output, label_perm, length)
+        #print("lp",label_perm.shape, label_perm)
+        loss_perm = pit_loss_single_permute(output, label_perm, length) #(b,1)
         loss_list.append(loss_perm)
-    loss = torch.cat(loss_list, dim=1)
+    loss = torch.cat(loss_list, dim=1) #(b,2) 2是permute的个数 n！
+    #print("loss",loss.shape, loss)
     min_loss, min_idx = torch.min(loss, dim=1)
+    #print(min_loss, min_idx)   #计算loss可以取不同的permute?
     loss = torch.sum(min_loss) / torch.sum(length.float().to(device))
     return loss, min_idx, permute_list
 
@@ -68,21 +74,21 @@ def calc_diarization_error(pred, label, length):
 
     # pred and label have the shape (batch_size, max_len, num_output)
     label_np = label.data.cpu().numpy().astype(int)
-    pred_np = (pred.data.cpu().numpy() > 0).astype(int)
+    pred_np = (pred.data.cpu().numpy() > 0).astype(int)  #0，1标签化
     label_np = label_np * mask
     pred_np = pred_np * mask
     length = length.data.cpu().numpy()
 
     # compute speech activity detection error
-    n_ref = np.sum(label_np, axis=2)
+    n_ref = np.sum(label_np, axis=2)         #一段话是否有声音(>0)则有 
     n_sys = np.sum(pred_np, axis=2)
-    speech_scored = float(np.sum(n_ref > 0))
-    speech_miss = float(np.sum(np.logical_and(n_ref > 0, n_sys == 0)))
+    speech_scored = float(np.sum(n_ref > 0))     #有人说话的总长度
+    speech_miss = float(np.sum(np.logical_and(n_ref > 0, n_sys == 0)))  #有声音但没预测出来
     speech_falarm = float(np.sum(np.logical_and(n_ref == 0, n_sys > 0)))
 
     # compute speaker diarization error
-    speaker_scored = float(np.sum(n_ref))
-    speaker_miss = float(np.sum(np.maximum(n_ref - n_sys, 0)))
+    speaker_scored = float(np.sum(n_ref))       #说话总段数
+    speaker_miss = float(np.sum(np.maximum(n_ref - n_sys, 0))) #有人声音但没预测出来
     speaker_falarm = float(np.sum(np.maximum(n_sys - n_ref, 0)))
     n_map = np.sum(np.logical_and(label_np == 1, pred_np == 1), axis=2)
     speaker_error = float(np.sum(np.minimum(n_ref, n_sys) - n_map))

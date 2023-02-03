@@ -235,25 +235,32 @@ class DownstreamExpert(nn.Module):
             loss:
                 the loss to be optimized, should not be detached
         """
-        labels = [torch.from_numpy(label) for label in labels]
+        #print("labels.shape",len(labels), labels[0].shape)
+        #print("features.shape",len(features),features[0].shape)
+        #print("lengths",lengths)    #lengths也是list，上面3个长都是batch
+        labels = [torch.from_numpy(label) for label in labels]   #[（t,2）,（t,2）....]b个
         lengths = torch.LongTensor(lengths)
 
-        features = pad_sequence(features, batch_first=True)
+        features = pad_sequence(features, batch_first=True)   #(b,t,dim)
+        #print("pad_sequence features.shape",features.shape)
         labels = pad_sequence(labels, batch_first=True, padding_value=0).to(
             features.device
         )
-        features, labels = self._match_length(features, labels)
-        predicted = self.model(features)
-
+        #print("pad_sequence labels.shape",labels.shape)
+        features, labels = self._match_length(features, labels)  #使得两个t一样
+        #print("_match_length", features.shape, labels.shape)
+        predicted = self.model(features)       #（b,t,2）
+        #print("predicted predicted.shape",predicted.shape)
         # cause logits are in (batch, seq, class) and labels are in (batch, seq)
         # nn.CrossEntropyLoss expect to have (N, class) and (N,) as input
         # here we flatten logits and labels in order to apply nn.CrossEntropyLoss
         class_num = predicted.size(-1)
-        loss, perm_idx, perm_list = self.objective(predicted, labels, lengths)
-
+        #print('predicted[0]',predicted[0])
+        loss, perm_idx, perm_list = self.objective(predicted, labels, lengths) #返回最小的permutation的loss
         # get the best label permutation
-        label_perm = get_label_perm(labels, perm_idx, perm_list)
-
+        label_perm = get_label_perm(labels, perm_idx, perm_list)   #确定计算loss时用到的label的permutation，同一个batch里可以用不同的permutation计算Loss，只取最小的
+        # print(label_perm.shape)
+        # exit()
         (
             correct,
             num_frames,
@@ -274,7 +281,11 @@ class DownstreamExpert(nn.Module):
                 speaker_falarm / speaker_scored,
                 speaker_error / speaker_scored,
                 correct / num_frames,
-                (speaker_miss + speaker_falarm + speaker_error) / speaker_scored,
+                (speaker_miss + speaker_falarm + speaker_error) / speaker_scored,    #这里DER指标不考虑重叠语音
+                #DER就是三者百分比之和，
+                #missed speech -- percentage of scored time for which a speech region is incorrectly marked as not containing speech
+                #false alarm speech -- percentage of scored time for which a nonspeech region is incorrectly marked as containing speech
+                #speaker error -- percentage of scored time for which the wrong speaker id is assigned within a speech region
             )
         else:
             SAD_MR, SAD_FR, MI, FA, CF, ACC, DER = 0, 0, 0, 0, 0, 0, 0
