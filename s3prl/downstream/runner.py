@@ -1,3 +1,4 @@
+import copy
 import os
 import sys
 import math
@@ -90,11 +91,53 @@ class Runner():
         self.config = config
         self.init_ckpt = torch.load(self.args.init_ckpt, map_location='cpu') if self.args.init_ckpt else {}
 
-        self.upstream = self._get_upstream()
-        self.featurizer = self._get_featurizer()
-        self.downstream = self._get_downstream()
-        self.all_entries = [self.upstream, self.featurizer, self.downstream]
+        
+        if args.mode == 'train':
+            self.upstream, self.featurizer, self.downstream,  self.all_entries = None, None, None, None
 
+            self.upstream_1 = self._get_upstream()
+            paired_wavs = [torch.randn(16000).to('cuda')]
+            with torch.no_grad():
+                paired_features = self.upstream_1.model(paired_wavs)
+            print("paired_wavs : ", paired_wavs, paired_features.keys())
+            # for name,param in self.upstream_1.model.named_parameters():
+            #     print(param)
+            #     break
+
+            self.featurizer_1 = self._get_featurizer(self.upstream_1)
+            self.downstream_1 = self._get_downstream(self.featurizer_1)
+            self.all_entries_1 = [self.upstream_1, self.featurizer_1, self.downstream_1]
+            print(type(self.upstream_1))
+            #不知道为什么不用copy(用_get)会造成结果不一致
+            self.upstream_2 = copy.deepcopy(self.upstream_1)
+            print(type(self.upstream_2))
+            #paired_wavs = [torch.randn(16000).to('cuda')]
+            with torch.no_grad():
+                paired_features = self.upstream_2.model(paired_wavs)
+            # for name,param in self.upstream_2.model.named_parameters():
+            #     print(param)
+            #     break
+            print("paired_wavs : ", paired_wavs, paired_features.keys(), self.upstream_2.model.parameters())
+            exit()
+            self.featurizer_2 = self._get_featurizer(self.upstream_2)
+            self.downstream_2 = copy.deepcopy(self.downstream_1)
+            self.all_entries_2 = [self.upstream_2, self.featurizer_2, self.downstream_2]
+
+            self.upstream_3 = copy.deepcopy(self.upstream_1)
+            self.featurizer_3 = self._get_featurizer(self.upstream_1)
+            self.downstream_3 = copy.deepcopy(self.downstream_1)
+            self.all_entries_3 = [self.upstream_3, self.featurizer_3, self.downstream_3]
+
+            self.upstreams = [self.upstream_1, self.upstream_2, self.upstream_3] #
+            self.featurizers = [self.featurizer_1, self.featurizer_2, self.featurizer_3] # 
+            self.downstreams = [self.downstream_1, self.downstream_2, self.downstream_3] # 
+
+            self.all_subnets_all_entries = [self.all_entries_1, self.all_entries_2, self.all_entries_3] #
+        else:
+            self.upstream = self._get_upstream()
+            self.featurizer = self._get_featurizer(self.upstream)
+            self.downstream = self._get_downstream(self.featurizer)
+            self.all_entries = [self.upstream, self.featurizer, self.downstream]
 
     def _load_weight(self, model, name):
         init_weight = self.init_ckpt.get(name)
@@ -163,9 +206,9 @@ class Runner():
         )
 
 
-    def _get_featurizer(self):
+    def _get_featurizer(self, upstream):
         model = Featurizer(
-            upstream = self.upstream.model,
+            upstream = upstream.model,
             feature_selection = self.args.upstream_feature_selection,
             layer_selection = self.args.upstream_layer_selection,
             upstream_device = self.args.device,
@@ -180,13 +223,13 @@ class Runner():
         )
 
 
-    def _get_downstream(self):
+    def _get_downstream(self, featurizer):
         expert = importlib.import_module(f"s3prl.downstream.{self.args.downstream}.expert")
         Downstream = getattr(expert, "DownstreamExpert")
 
         model = Downstream(
-            upstream_dim = self.featurizer.model.output_dim,
-            upstream_rate = self.featurizer.model.downsample_rate,
+            upstream_dim = featurizer.model.output_dim,
+            upstream_rate = featurizer.model.downsample_rate,
             **self.config,
             **vars(self.args)
         ).to(self.args.device)
@@ -224,13 +267,15 @@ class Runner():
             f.write(model_card)
 
     def get_fisher_mask(self):
-        grad_mask = dict()
+        grad_masks = [dict() for i in range(3)]
         #self.upstream.model.train()
-
+        
         records = defaultdict(list)
 
-        for entry in self.all_entries:
+        for entry in self.all_subnets_all_entries[0]:
             entry.model.train()
+        # for entry in self.all_entries:
+        #      entry.model.train()
         tuning_pcount = 0
         pcount = 0
         # specaug
@@ -239,11 +284,12 @@ class Runner():
             from .specaug import SpecAug
             specaug = SpecAug(**self.config["specaug"])
         
-        for name, params in self.upstream.model.named_parameters():
+        for name, params in self.upstreams[0].model.named_parameters():
 
             if 'encoder.layers' in name or 'layer_norm' in name:
                 print("encoder.layers or layer_norm : ", name)
-                grad_mask[params] = params.new_zeros(params.size())
+                for i in range(3):
+                    grad_masks[i][params] = params.new_zeros(params.size())
                 tuning_pcount += params.numel()
             else:
                 print('frozen: ', name)      
@@ -252,14 +298,14 @@ class Runner():
             if 'final_proj'  not in name:
                 pcount += params.numel()
         
-        tuning_pcount *= self.config['optimizer']['reserve_p']
+        tuning_pcount *= np.array(self.config['optimizer']['reserve_p'])
 
         print(f'num of tuning params: {tuning_pcount / 1e6} M')
         print(f'num of total params: {pcount / 1e6} M')
         
         # Now begin
         train_split = self.config['runner'].get("train_dataloader", "train")
-        train_dataloader = self.downstream.model.get_dataloader(train_split)
+        train_dataloader = self.downstreams[0].model.get_dataloader(train_split)
         
         N = len(train_dataloader)
 
@@ -268,13 +314,13 @@ class Runner():
             try:
                 wavs = [torch.FloatTensor(wav).to(self.args.device) for wav in wavs]
 
-                features = self.upstream.model(wavs)
-                features = self.featurizer.model(wavs, features)
+                features = self.upstreams[0].model(wavs)
+                features = self.featurizers[0].model(wavs, features)
 
                 if specaug:
                     features, _ = specaug(features)
 
-                loss = self.downstream.model(
+                loss = self.downstreams[0].model(
                     train_split,
                     features, *others,
                     records = records,
@@ -283,13 +329,15 @@ class Runner():
                 gradient_accumulate_steps = self.config['runner'].get('gradient_accumulate_steps')
                 (loss / gradient_accumulate_steps).backward()
 
-                for name, params in self.upstream.model.named_parameters():
-                    if 'encoder.layers' in name:
+                for name, params in self.upstreams[0].model.named_parameters():
+                    if 'encoder.layers' in name: #应该laynorn也，不过影响不大
                         torch.nn.utils.clip_grad_norm_(params, self.config['runner']['gradient_clipping'])
-                        grad_mask[params] += (params.grad ** 2) / N               #累计梯度
+                        fisher_item = (params.grad ** 2) / N 
+                        for grad_mask in grad_masks:
+                            grad_mask[params] += fisher_item              #累计梯度
 
-                self.upstream.model.zero_grad()         
-                # for entry in self.all_entries:
+                self.upstreams[0].model.zero_grad()         
+                # for entry in self.all_entries:   #应该所有清零，不过影响不大，只迭代一步就会归零
                 #     entry.model.zero_grad()
                 del loss
             except RuntimeError as e:
@@ -299,7 +347,7 @@ class Runner():
                             raise
                         with torch.cuda.device(self.args.device):
                             torch.cuda.empty_cache()
-                        self.upstream.model.zero_grad()  
+                        self.upstreams[0].model.zero_grad()  
                         # for entry in self.all_entries:
                         #     entry.model.zero_grad()
                         continue
@@ -309,40 +357,61 @@ class Runner():
 
         # Numpy
         r = None
-        for k, v in grad_mask.items():
+        for k, v in grad_masks[0].items():
             v = v.view(-1).cpu().numpy()
             if r is None:
                 r = v
             else:
                 r = np.append(r, v)
-        polar = np.percentile(r, (1-self.config['optimizer']['reserve_p'])*100)
-        for k in grad_mask:
-            grad_mask[k] = grad_mask[k] >= polar
-        print('Polar => {}'.format(polar))
+        polars = [np.percentile(r, (1-reserve_p)*100) for reserve_p in self.config['optimizer']['reserve_p']]
+        for i, grad_mask in enumerate(grad_masks):
+            for k in grad_mask:
+                grad_mask[k] = grad_mask[k] >= polars[i]
+        print('candidate P => {}; Polar => {}'.format(self.config['optimizer']['reserve_p'], polars))
 
         # TODO: pytorch: torch.kthvalue
         
-        return grad_mask
+        return grad_masks
 
     def train(self):
         # trainable parameters and train/eval mode
-        trainable_models = []
-        trainable_paras = []
-        for entry in self.all_entries:
-            if entry.trainable:
-                entry.model.train()
-                trainable_models.append(entry.model)
-                trainable_paras += list(entry.model.parameters())
-            else:
-                entry.model.eval()
+        trainable_models_list = []
+        trainable_paras_list = []
+        for all_entries in self.all_subnets_all_entries:
+        #for all_entries in [self.all_entries]:
+            trainable_models = []
+            trainable_paras = []
+            for entry in all_entries:
+                if entry.trainable:
+
+                    entry.model.train()
+                    trainable_models.append(entry.model)
+                    trainable_paras += list(entry.model.parameters())
+                else:
+                    entry.model.eval()
+            trainable_models_list.append(trainable_models)
+            trainable_paras_list.append(trainable_paras)
+
+        # trainable_models = []
+        # trainable_paras = []
+        # for entry in self.all_entries:
+        #     if entry.trainable:
+        #         entry.model.train()
+        #         trainable_models.append(entry.model)
+        #         trainable_paras += list(entry.model.parameters())
+        #     else:
+        #         entry.model.eval()
 
         # optimizer
-        optimizer = self._get_optimizer(trainable_models)
+        #optimizer = self._get_optimizer(trainable_models)
+        optimizers = [self._get_optimizer(trainable_models) for trainable_models in trainable_models_list]
 
         # scheduler
-        scheduler = None
+        #scheduler = None
+        schedulers = [None, None, None]
         if self.config.get('scheduler'):
-            scheduler = self._get_scheduler(optimizer)
+            #scheduler = self._get_scheduler(optimizer)
+            schedulers = [self._get_scheduler(optimizer) for optimizer in optimizers]
 
         # specaug
         specaug = None
@@ -352,6 +421,7 @@ class Runner():
 
         # progress bar
         tqdm_file = sys.stderr if is_leader_process() else open(os.devnull, 'w')
+        #selete_pbars = [tqdm(total=self.config['runner']['total_steps'] * 0.1, dynamic_ncols=True, desc='overall', file=tqdm_file) for i in range(3)]
         pbar = tqdm(total=self.config['runner']['total_steps'], dynamic_ncols=True, desc='overall', file=tqdm_file)
         init_step = self.init_ckpt.get('Step')
         if init_step:
@@ -360,7 +430,7 @@ class Runner():
         # Tensorboard logging
         if is_leader_process():
             logger = SummaryWriter(self.args.expdir)
-        
+            #loggers = [SummaryWriter(self.args.expdir) for i in range(3)]
         batch_ids = []
         backward_steps = 0
         records = defaultdict(list)
@@ -371,9 +441,17 @@ class Runner():
         #get_fisher_mask & set mask
         if self.args.tuning_mode == "subnet":
             print(f'[Runner] - Here is Subnet Tuning')
-            grad_mask = self.get_fisher_mask()
-            optimizer.set_grad_mask(grad_mask)
-            if self.upstream.trainable:
+            grad_masks = self.get_fisher_mask()
+            for i in range(len(optimizers)):
+                optimizers[i].set_grad_mask(grad_masks[i])
+            # optimizer = optimizers[0]
+            # scheduler = schedulers[0]
+            # trainable_paras = trainable_paras_list[0]
+            # self.upstream = self.upstreams[0]
+            # self.featurizer = self.featurizers[0]
+            # self.downstream = self.downstreams[0]
+            # self.all_entries = self.all_subnets_all_entries[0]
+            if self.upstreams[0].trainable:
                 print("upstream is tuning")
             # tcont = 0
             # for name, params in self.upstream.model.named_parameters():
@@ -382,6 +460,159 @@ class Runner():
             # print(f'-------------------tcont = {tcont}-----------------------------')
         # =================== HACK END =========================  
 
+        # =================== HACK BEGIN =======================  
+        # model-seletion dependon on training loss
+        
+        if self.args.auto_resume is True:
+            #还没写载入指定p的optimizers
+            self.upstream = self.upstream_1
+            self.featurizer = self.featurizer_1
+            self.downstream = self.downstream_1   
+            optimizer = optimizers[0]
+            scheduler = schedulers[0]
+            
+            for i in range(2, 4):
+                exec(f"del self.upstream_{i}")
+                exec(f"del self.featurizer_{i}")
+                exec(f"del self.downstream_{i}")
+
+        else:
+            min_last_loss = 0x3f3f3f3f
+            min_idx = 0
+            epoch_steps = None
+            for i in range(len(self.all_subnets_all_entries)):
+                epoch = 0
+                batch_ids = []
+                backward_steps = 0
+                # 定义滑动平均系数
+                alpha = 0.4
+                smoothed_value = None
+                records = defaultdict(list)
+                global_step = 0
+                try:
+                    dataloader = self.downstreams[i].model.get_dataloader(train_split, epoch=epoch)
+                except TypeError as e:
+                    if "unexpected keyword argument 'epoch'" in str(e):
+                        dataloader = self.downstreams[i].model.get_dataloader(train_split)
+                        if hasattr(dataloader, "sampler") and isinstance(dataloader.sampler, DistributedSampler):
+                            dataloader.sampler.set_epoch(epoch)
+                    else:
+                        raise
+                epoch_steps = len(dataloader)
+                print(f"epoch_steps is {epoch_steps}")
+                cur_p = self.config['optimizer']['reserve_p'][i]    
+                for batch_id, (wavs, *others) in enumerate(tqdm(dataloader, dynamic_ncols=True, desc=f'strive_{cur_p}', file=tqdm_file)):
+                    # try/except block for forward/backward
+                    try:
+                        global_step += 1
+                        wavs = [torch.FloatTensor(wav).to(self.args.device) for wav in wavs]
+                        if self.upstreams[i].trainable:
+                            features = self.upstreams[i].model(wavs)
+                        else:
+                            with torch.no_grad():
+                                features = self.upstreams[i].model(wavs)
+                        if i == 1:
+                            print(features)
+                        features = self.featurizers[i].model(wavs, features)
+
+                        if specaug:
+                            features, _ = specaug(features)
+
+                        loss = self.downstreams[i].model(
+                            train_split,
+                            features, *others,
+                            records = records,
+                        )
+                        batch_ids.append(batch_id)
+
+                        gradient_accumulate_steps = self.config['runner'].get('gradient_accumulate_steps')
+                        (loss / gradient_accumulate_steps).backward()
+                        del loss
+
+                    except RuntimeError as e:
+                        if 'CUDA out of memory' in str(e):
+                            print(f'[Runner] - CUDA out of memory at step {global_step}')
+                            if is_initialized():
+                                raise
+                            with torch.cuda.device(self.args.device):
+                                torch.cuda.empty_cache()
+                            optimizers[i].zero_grad()
+                            continue
+                        else:
+                            raise
+
+                    # whether to accumulate gradient
+                    backward_steps += 1
+                    if backward_steps % gradient_accumulate_steps > 0:
+                        continue
+
+                    # gradient clipping
+                    grad_norm = torch.nn.utils.clip_grad_norm_(
+                        trainable_paras_list[i], self.config['runner']['gradient_clipping'])
+
+                    # optimize
+                    if math.isnan(grad_norm):
+                        print(f'[Runner] - grad norm is NaN at step {global_step}')
+                    else:
+                        optimizers[i].step()
+                    optimizers[i].zero_grad()
+
+                    # adjust learning rate
+                    if schedulers[i]:
+                        schedulers[i].step()
+
+                    if not is_leader_process():
+                        batch_ids = []
+                        records = defaultdict(list)
+                        continue
+
+                    # logging
+                    if global_step % self.config['runner']['log_step'] == 0:
+                        self.downstreams[i].model.log_records(
+                            train_split,
+                            records = records,
+                            logger = logger,
+                            global_step = global_step,
+                            batch_ids = batch_ids,
+                            total_batch_num = len(dataloader),
+                        )
+                        begin_idx = 0
+                        if smoothed_value == None:
+                            smoothed_value = records["loss"][0]
+                            begin_idx = 1
+                        # 对数据进行平滑
+                        for j in range(begin_idx, len(records["loss"])):
+                            smoothed_value = alpha * smoothed_value + (1 - alpha) * records["loss"][j]
+                        batch_ids = []
+                        records = defaultdict(list)
+                
+                epoch += 1
+                
+                if i == 0:
+                    min_last_loss = smoothed_value
+                    min_idx = 0
+                elif min_last_loss > smoothed_value:
+                    min_last_loss = smoothed_value
+                    min_idx = i
+                print(f"min_last_loss: {min_last_loss}, smoothed_value: {smoothed_value} current_selete_p: {self.config['optimizer']['reserve_p'][min_idx]}")
+            self.upstream = self.upstreams[min_idx]
+            self.featurizer = self.featurizers[min_idx]
+            self.downstream = self.downstreams[min_idx]
+            self.all_entries = self.all_subnets_all_entries[min_idx]
+            trainable_paras = trainable_paras_list[min_idx]
+            optimizer = optimizers[min_idx]
+            scheduler = schedulers[min_idx]
+
+            for i in range(3):
+                if i != min_idx:
+                    exec(f"del self.upstream_{i+1}")
+                    exec(f"del self.featurizer_{i+1}")
+                    exec(f"del self.downstream_{i+1}")
+            print(len(self.upstreams))
+            print(f"selete p => {self.config['optimizer']['reserve_p'][min_idx]}")
+
+        pbar.update(epoch_steps)
+        # =================== HACK END =========================  
         while pbar.n < pbar.total:
             try:
                 dataloader = self.downstream.model.get_dataloader(train_split, epoch=epoch)
@@ -442,6 +673,8 @@ class Runner():
                 # gradient clipping
                 grad_norm = torch.nn.utils.clip_grad_norm_(
                     trainable_paras, self.config['runner']['gradient_clipping'])
+                # grad_norm = torch.nn.utils.clip_grad_norm_(
+                #     trainable_paras_list[min_idx], self.config['runner']['gradient_clipping'])
 
                 # optimize
                 if math.isnan(grad_norm):
