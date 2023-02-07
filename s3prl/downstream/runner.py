@@ -1,4 +1,4 @@
-import copy
+import copy, itertools
 import os
 import sys
 import math
@@ -72,6 +72,30 @@ Upstream Model: {upstream_model}
 
 """
 
+def fix_seed(args):
+    # Fix seed and make backends deterministic
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    if torch.cuda.is_available(): torch.cuda.manual_seed_all(args.seed)
+    if args.disable_cudnn:
+        torch.backends.cudnn.enabled = False
+    else:
+        torch.backends.cudnn.enabled = True
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+
+def get_random_state():
+    torch_rng_state = torch.get_rng_state()
+    np_rng_state = np.random.get_state()
+    random_state = random.getstate()
+    return torch_rng_state, np_rng_state, random_state
+
+def set_random_state(state):
+    torch_rng_state, np_rng_state, random_state = state
+    torch.set_rng_state(torch_rng_state)
+    np.random.set_state(np_rng_state)
+    random.setstate(random_state)
 
 class ModelEntry:
     def __init__(self, model, name, trainable, interfaces):
@@ -96,41 +120,29 @@ class Runner():
             self.upstream, self.featurizer, self.downstream,  self.all_entries = None, None, None, None
 
             self.upstream_1 = self._get_upstream()
-            paired_wavs = [torch.randn(16000).to('cuda')]
-            with torch.no_grad():
-                paired_features = self.upstream_1.model(paired_wavs)
-            print("paired_wavs : ", paired_wavs, paired_features.keys())
-            # for name,param in self.upstream_1.model.named_parameters():
-            #     print(param)
-            #     break
 
             self.featurizer_1 = self._get_featurizer(self.upstream_1)
             self.downstream_1 = self._get_downstream(self.featurizer_1)
             self.all_entries_1 = [self.upstream_1, self.featurizer_1, self.downstream_1]
-            print(type(self.upstream_1))
-            #不知道为什么不用copy(用_get)会造成结果不一致
-            self.upstream_2 = copy.deepcopy(self.upstream_1)
-            print(type(self.upstream_2))
-            #paired_wavs = [torch.randn(16000).to('cuda')]
-            with torch.no_grad():
-                paired_features = self.upstream_2.model(paired_wavs)
-            # for name,param in self.upstream_2.model.named_parameters():
-            #     print(param)
-            #     break
-            print("paired_wavs : ", paired_wavs, paired_features.keys(), self.upstream_2.model.parameters())
-            exit()
+            
+            #deepcopy upstream模型forward为空，不知道为什么
+            random_state = get_random_state()
+
+            self.upstream_2 = self._get_upstream()
+
             self.featurizer_2 = self._get_featurizer(self.upstream_2)
-            self.downstream_2 = copy.deepcopy(self.downstream_1)
+            self.downstream_2 = self._get_downstream(self.featurizer_2)
             self.all_entries_2 = [self.upstream_2, self.featurizer_2, self.downstream_2]
 
-            self.upstream_3 = copy.deepcopy(self.upstream_1)
-            self.featurizer_3 = self._get_featurizer(self.upstream_1)
-            self.downstream_3 = copy.deepcopy(self.downstream_1)
+            self.upstream_3 = self._get_upstream()
+            self.featurizer_3 = self._get_featurizer(self.upstream_3)
+            self.downstream_3 = self._get_downstream(self.featurizer_3)
             self.all_entries_3 = [self.upstream_3, self.featurizer_3, self.downstream_3]
 
             self.upstreams = [self.upstream_1, self.upstream_2, self.upstream_3] #
             self.featurizers = [self.featurizer_1, self.featurizer_2, self.featurizer_3] # 
             self.downstreams = [self.downstream_1, self.downstream_2, self.downstream_3] # 
+            set_random_state(random_state)
 
             self.all_subnets_all_entries = [self.all_entries_1, self.all_entries_2, self.all_entries_3] #
         else:
@@ -183,6 +195,7 @@ class Runner():
         else:
             Upstream = getattr(hub, self.args.upstream)
             ckpt_path = self.args.upstream_ckpt
+
         upstream_refresh = self.args.upstream_refresh
 
         if is_initialized() and get_rank() > 0:
@@ -267,7 +280,7 @@ class Runner():
             f.write(model_card)
 
     def get_fisher_mask(self):
-        grad_masks = [dict() for i in range(3)]
+        grad_masks = [dict() for i in range(len(self.all_subnets_all_entries))]
         #self.upstream.model.train()
         
         records = defaultdict(list)
@@ -288,7 +301,7 @@ class Runner():
 
             if 'encoder.layers' in name or 'layer_norm' in name:
                 print("encoder.layers or layer_norm : ", name)
-                for i in range(3):
+                for i in range(len(self.all_subnets_all_entries)):
                     grad_masks[i][params] = params.new_zeros(params.size())
                 tuning_pcount += params.numel()
             else:
@@ -330,15 +343,15 @@ class Runner():
                 (loss / gradient_accumulate_steps).backward()
 
                 for name, params in self.upstreams[0].model.named_parameters():
-                    if 'encoder.layers' in name: #应该laynorn也，不过影响不大
+                    if 'encoder.layers' in name or 'layer_norm' in name: #应该laynorn也，不过影响不大
                         torch.nn.utils.clip_grad_norm_(params, self.config['runner']['gradient_clipping'])
                         fisher_item = (params.grad ** 2) / N 
                         for grad_mask in grad_masks:
                             grad_mask[params] += fisher_item              #累计梯度
 
                 self.upstreams[0].model.zero_grad()         
-                # for entry in self.all_entries:   #应该所有清零，不过影响不大，只迭代一步就会归零
-                #     entry.model.zero_grad()
+                for entry in self.all_subnets_all_entries[0]:
+                        entry.model.zero_grad()
                 del loss
             except RuntimeError as e:
                     if 'CUDA out of memory' in str(e):
@@ -347,9 +360,8 @@ class Runner():
                             raise
                         with torch.cuda.device(self.args.device):
                             torch.cuda.empty_cache()
-                        self.upstreams[0].model.zero_grad()  
-                        # for entry in self.all_entries:
-                        #     entry.model.zero_grad()
+                        for entry in self.all_subnets_all_entries[0]:
+                            entry.model.zero_grad()
                         continue
                     else:
                         raise
@@ -392,18 +404,6 @@ class Runner():
             trainable_models_list.append(trainable_models)
             trainable_paras_list.append(trainable_paras)
 
-        # trainable_models = []
-        # trainable_paras = []
-        # for entry in self.all_entries:
-        #     if entry.trainable:
-        #         entry.model.train()
-        #         trainable_models.append(entry.model)
-        #         trainable_paras += list(entry.model.parameters())
-        #     else:
-        #         entry.model.eval()
-
-        # optimizer
-        #optimizer = self._get_optimizer(trainable_models)
         optimizers = [self._get_optimizer(trainable_models) for trainable_models in trainable_models_list]
 
         # scheduler
@@ -430,13 +430,12 @@ class Runner():
         # Tensorboard logging
         if is_leader_process():
             logger = SummaryWriter(self.args.expdir)
-            #loggers = [SummaryWriter(self.args.expdir) for i in range(3)]
-        batch_ids = []
-        backward_steps = 0
-        records = defaultdict(list)
-        epoch = self.init_ckpt.get('Epoch', 0)
-        train_split = self.config['runner'].get("train_dataloader", "train")
 
+        epoch = self.init_ckpt.get('Epoch', 0)
+        optim_p = None
+        train_split = self.config['runner'].get("train_dataloader", "train")
+        records = [defaultdict(list), defaultdict(list), defaultdict(list)]
+        selete_p = self.init_ckpt.get('Optim_p', -1)
         # =================== HACK BEGIN =======================   
         #get_fisher_mask & set mask
         if self.args.tuning_mode == "subnet":
@@ -444,81 +443,192 @@ class Runner():
             grad_masks = self.get_fisher_mask()
             for i in range(len(optimizers)):
                 optimizers[i].set_grad_mask(grad_masks[i])
-            # optimizer = optimizers[0]
-            # scheduler = schedulers[0]
-            # trainable_paras = trainable_paras_list[0]
-            # self.upstream = self.upstreams[0]
-            # self.featurizer = self.featurizers[0]
-            # self.downstream = self.downstreams[0]
-            # self.all_entries = self.all_subnets_all_entries[0]
             if self.upstreams[0].trainable:
                 print("upstream is tuning")
-            # tcont = 0
-            # for name, params in self.upstream.model.named_parameters():
-            #     if params.requires_grad == True:
-            #         tcont += params.numel()
-            # print(f'-------------------tcont = {tcont}-----------------------------')
+            if selete_p != -1:
+                min_idx = self.config['optimizer']['reserve_p'].index(selete_p)
+
+                self.upstream = self.upstreams[min_idx]
+                self.featurizer = self.featurizers[min_idx]
+                self.downstream = self.downstreams[min_idx]
+                self.all_entries = self.all_subnets_all_entries[min_idx]
+                trainable_paras = trainable_paras_list[min_idx]
+                optimizer = optimizers[min_idx]
+                scheduler = schedulers[min_idx]
+                records = records[min_idx]
+                for i in range(len(self.all_subnets_all_entries)):
+                    if i != min_idx:
+                        exec(f"del self.upstream_{i+1}")
+                        exec(f"del self.featurizer_{i+1}")
+                        exec(f"del self.downstream_{i+1}")
+                optim_p = self.config['optimizer']['reserve_p'][min_idx]
+                print(f"selete p => {self.config['optimizer']['reserve_p'][min_idx]}")
         # =================== HACK END =========================  
 
         # =================== HACK BEGIN =======================  
         # model-seletion dependon on training loss
-        
-        if self.args.auto_resume is True:
-            #还没写载入指定p的optimizers
-            self.upstream = self.upstream_1
-            self.featurizer = self.featurizer_1
-            self.downstream = self.downstream_1   
-            optimizer = optimizers[0]
-            scheduler = schedulers[0]
-            
-            for i in range(2, 4):
-                exec(f"del self.upstream_{i}")
-                exec(f"del self.featurizer_{i}")
-                exec(f"del self.downstream_{i}")
+        # =================== HACK END =========================  
+        min_idx = 0
+        strive_steps = self.config['runner']['total_steps'] * 0.1
+        epoch = self.init_ckpt.get('Epoch', 0)
+        batch_ids = []
+        backward_steps = 0
 
-        else:
-            min_last_loss = 0x3f3f3f3f
-            min_idx = 0
-            epoch_steps = None
-            for i in range(len(self.all_subnets_all_entries)):
-                epoch = 0
-                batch_ids = []
-                backward_steps = 0
-                # 定义滑动平均系数
-                alpha = 0.4
-                smoothed_value = None
-                records = defaultdict(list)
-                global_step = 0
-                try:
-                    dataloader = self.downstreams[i].model.get_dataloader(train_split, epoch=epoch)
-                except TypeError as e:
-                    if "unexpected keyword argument 'epoch'" in str(e):
-                        dataloader = self.downstreams[i].model.get_dataloader(train_split)
-                        if hasattr(dataloader, "sampler") and isinstance(dataloader.sampler, DistributedSampler):
-                            dataloader.sampler.set_epoch(epoch)
-                    else:
-                        raise
-                epoch_steps = len(dataloader)
-                print(f"epoch_steps is {epoch_steps}")
-                cur_p = self.config['optimizer']['reserve_p'][i]    
-                for batch_id, (wavs, *others) in enumerate(tqdm(dataloader, dynamic_ncols=True, desc=f'strive_{cur_p}', file=tqdm_file)):
-                    # try/except block for forward/backward
+        # 定义滑动平均系数
+        alpha = 0.6
+        last = [0, 0, 0]
+        smoothed_value = [0, 0, 0]
+        num_acc = 0
+        
+        global_step = 0
+        strive_bar = tqdm(total=strive_steps, dynamic_ncols=True, desc=f'strive', file=tqdm_file)
+
+        while pbar.n < pbar.total:
+            try:
+                dataloader = self.downstreams[0].model.get_dataloader(train_split, epoch=epoch)
+            except TypeError as e:
+                if "unexpected keyword argument 'epoch'" in str(e):
+                    dataloader = self.downstreams[0].model.get_dataloader(train_split)
+                    if hasattr(dataloader, "sampler") and isinstance(dataloader.sampler, DistributedSampler):
+                        dataloader.sampler.set_epoch(epoch)
+                else:
+                    raise
+
+            for batch_id, (wavs, *others) in enumerate(tqdm(dataloader, dynamic_ncols=True, desc='train', file=tqdm_file)):
+                # try/except block for forward/backward
+                
+                wavs = [torch.FloatTensor(wav).to(self.args.device) for wav in wavs]
+                batch_ids.append(batch_id)
+                if pbar.n < strive_steps:
+                    global_step = pbar.n + 1
+                    for i in range(len(self.all_subnets_all_entries)):
+                        try:
+                            if self.upstreams[i].trainable:
+                                features = self.upstreams[i].model(wavs)
+
+                            else:
+                                with torch.no_grad():
+                                    features = self.upstreams[i].model(wavs)
+
+                            # print(features)
+                            # for na, pa in self.upstreams[i].model.named_parameters():
+                            #     print(pa)
+                            #     break
+ 
+                            features = self.featurizers[i].model(wavs, features)
+
+                            if specaug:
+                                features, _ = specaug(features)
+
+                            loss = self.downstreams[i].model(
+                                train_split,
+                                features, *others,
+                                records = records[i],
+                            )
+                            
+                            gradient_accumulate_steps = self.config['runner'].get('gradient_accumulate_steps')
+                            (loss / gradient_accumulate_steps).backward()
+                            del loss
+
+                        except RuntimeError as e:
+                            if 'CUDA out of memory' in str(e):
+                                print(f'[Runner] - CUDA out of memory at step {global_step}')
+                                if is_initialized():
+                                    raise
+                                with torch.cuda.device(self.args.device):
+                                    torch.cuda.empty_cache()
+                                optimizers[i].zero_grad()
+                                continue
+                            else:
+                                raise
+
+                        # whether to accumulate gradient
+                        if i == 0:   #只累计一次
+                            backward_steps += 1
+                        if backward_steps % gradient_accumulate_steps > 0:
+                            continue
+
+                        # gradient clipping
+                        grad_norm = torch.nn.utils.clip_grad_norm_(
+                        trainable_paras_list[i], self.config['runner']['gradient_clipping'])
+
+                        # optimize
+                        if math.isnan(grad_norm):
+                            print(f'[Runner] - grad norm is NaN at step {global_step}')
+                        else:
+                            optimizers[i].step()
+                        optimizers[i].zero_grad()
+
+                        # adjust learning rate
+                        if schedulers[i]:
+                            schedulers[i].step()
+
+                        if not is_leader_process():
+                            batch_ids = []
+                            records = [defaultdict(list), defaultdict(list), defaultdict(list)]
+                            continue
+                        if i == 0:
+                            pbar.update(1)
+                            strive_bar.update(1)
+
+                    # logging
+                    if global_step % self.config['runner']['log_step'] == 0:
+
+                        # 对数据进行平滑
+                        num_acc += 1
+                        debias_weight = 1.0 if alpha == 1.0 else 1.0 - alpha ** num_acc
+                        for i in range(len(self.all_subnets_all_entries)):
+                            self.downstreams[i].model.log_records(
+                            train_split,
+                            records = records[i],
+                            logger = logger,
+                            global_step = global_step,
+                            batch_ids = batch_ids,
+                            total_batch_num = len(dataloader),
+                            )
+                            print("cur value", sum(records[i]["loss"]) / len(records[i]["loss"]))
+                            cur_value = sum(records[i]["loss"]) / len(records[i]["loss"])
+                            last[i] = alpha * last[i] + (1 - alpha) * cur_value
+                            smoothed_value[i] = last[i] / debias_weight
+                        print("smoothed_value : ", smoothed_value)
+                        batch_ids = []
+                        records = [defaultdict(list), defaultdict(list), defaultdict(list)]
+                    
+                    if global_step == strive_steps:    #选则最优的p
+                        min_idx = smoothed_value.index(min(smoothed_value))
+                        self.upstream = self.upstreams[min_idx]
+                        self.featurizer = self.featurizers[min_idx]
+                        self.downstream = self.downstreams[min_idx]
+                        self.all_entries = self.all_subnets_all_entries[min_idx]
+                        trainable_paras = trainable_paras_list[min_idx]
+                        optimizer = optimizers[min_idx]
+                        scheduler = schedulers[min_idx]
+                        records = records[min_idx]
+                        
+                        for i in range(len(self.all_subnets_all_entries)):
+                            if i != min_idx:
+                                exec(f"del self.upstream_{i+1}")
+                                exec(f"del self.featurizer_{i+1}")
+                                exec(f"del self.downstream_{i+1}")
+                        optim_p = self.config['optimizer']['reserve_p'][min_idx]
+                        print(f"selete p => {self.config['optimizer']['reserve_p'][min_idx]}")
+                            
+                else:
                     try:
-                        global_step += 1
-                        wavs = [torch.FloatTensor(wav).to(self.args.device) for wav in wavs]
-                        if self.upstreams[i].trainable:
-                            features = self.upstreams[i].model(wavs)
+                        if pbar.n >= pbar.total:
+                                break
+                        global_step = pbar.n + 1
+                        if self.upstream.trainable:
+                            features = self.upstream.model(wavs)
                         else:
                             with torch.no_grad():
-                                features = self.upstreams[i].model(wavs)
-                        if i == 1:
-                            print(features)
-                        features = self.featurizers[i].model(wavs, features)
+                                features = self.upstream.model(wavs)
+                        features = self.featurizer.model(wavs, features)
 
                         if specaug:
                             features, _ = specaug(features)
 
-                        loss = self.downstreams[i].model(
+                        loss = self.downstream.model(
                             train_split,
                             features, *others,
                             records = records,
@@ -536,7 +646,7 @@ class Runner():
                                 raise
                             with torch.cuda.device(self.args.device):
                                 torch.cuda.empty_cache()
-                            optimizers[i].zero_grad()
+                            optimizer.zero_grad()
                             continue
                         else:
                             raise
@@ -548,18 +658,18 @@ class Runner():
 
                     # gradient clipping
                     grad_norm = torch.nn.utils.clip_grad_norm_(
-                        trainable_paras_list[i], self.config['runner']['gradient_clipping'])
+                        trainable_paras, self.config['runner']['gradient_clipping'])
 
                     # optimize
                     if math.isnan(grad_norm):
                         print(f'[Runner] - grad norm is NaN at step {global_step}')
                     else:
-                        optimizers[i].step()
-                    optimizers[i].zero_grad()
+                        optimizer.step()
+                    optimizer.zero_grad()
 
                     # adjust learning rate
-                    if schedulers[i]:
-                        schedulers[i].step()
+                    if scheduler:
+                        scheduler.step()
 
                     if not is_leader_process():
                         batch_ids = []
@@ -568,7 +678,7 @@ class Runner():
 
                     # logging
                     if global_step % self.config['runner']['log_step'] == 0:
-                        self.downstreams[i].model.log_records(
+                        self.downstream.model.log_records(
                             train_split,
                             records = records,
                             logger = logger,
@@ -576,179 +686,54 @@ class Runner():
                             batch_ids = batch_ids,
                             total_batch_num = len(dataloader),
                         )
-                        begin_idx = 0
-                        if smoothed_value == None:
-                            smoothed_value = records["loss"][0]
-                            begin_idx = 1
-                        # 对数据进行平滑
-                        for j in range(begin_idx, len(records["loss"])):
-                            smoothed_value = alpha * smoothed_value + (1 - alpha) * records["loss"][j]
                         batch_ids = []
                         records = defaultdict(list)
-                
-                epoch += 1
-                
-                if i == 0:
-                    min_last_loss = smoothed_value
-                    min_idx = 0
-                elif min_last_loss > smoothed_value:
-                    min_last_loss = smoothed_value
-                    min_idx = i
-                print(f"min_last_loss: {min_last_loss}, smoothed_value: {smoothed_value} current_selete_p: {self.config['optimizer']['reserve_p'][min_idx]}")
-            self.upstream = self.upstreams[min_idx]
-            self.featurizer = self.featurizers[min_idx]
-            self.downstream = self.downstreams[min_idx]
-            self.all_entries = self.all_subnets_all_entries[min_idx]
-            trainable_paras = trainable_paras_list[min_idx]
-            optimizer = optimizers[min_idx]
-            scheduler = schedulers[min_idx]
 
-            for i in range(3):
-                if i != min_idx:
-                    exec(f"del self.upstream_{i+1}")
-                    exec(f"del self.featurizer_{i+1}")
-                    exec(f"del self.downstream_{i+1}")
-            print(len(self.upstreams))
-            print(f"selete p => {self.config['optimizer']['reserve_p'][min_idx]}")
+                    # evaluation and save checkpoint
+                    save_names = []
 
-        pbar.update(epoch_steps)
-        # =================== HACK END =========================  
-        while pbar.n < pbar.total:
-            try:
-                dataloader = self.downstream.model.get_dataloader(train_split, epoch=epoch)
-            except TypeError as e:
-                if "unexpected keyword argument 'epoch'" in str(e):
-                    dataloader = self.downstream.model.get_dataloader(train_split)
-                    if hasattr(dataloader, "sampler") and isinstance(dataloader.sampler, DistributedSampler):
-                        dataloader.sampler.set_epoch(epoch)
-                else:
-                    raise
+                    if global_step % self.config['runner']['eval_step'] == 0:
+                        for split in self.config['runner']['eval_dataloaders']:
+                            save_names += self.evaluate(split, logger, global_step)
 
-            for batch_id, (wavs, *others) in enumerate(tqdm(dataloader, dynamic_ncols=True, desc='train', file=tqdm_file)):
-                # try/except block for forward/backward
-                try:
-                    if pbar.n >= pbar.total:
-                        break
-                    global_step = pbar.n + 1
+                    if global_step % self.config['runner']['save_step'] == 0:
+                        def check_ckpt_num(directory):
+                            max_keep = self.config['runner']['max_keep']
+                            ckpt_pths = glob.glob(f'{directory}/states-*.ckpt')
+                            if len(ckpt_pths) >= max_keep:
+                                ckpt_pths = sorted(ckpt_pths, key=lambda pth: int(pth.split('-')[-1].split('.')[0]))
+                                for ckpt_pth in ckpt_pths[:len(ckpt_pths) - max_keep + 1]:
+                                    os.remove(ckpt_pth)
+                        check_ckpt_num(self.args.expdir)
+                        save_names.append(f'states-{global_step}.ckpt')
 
-                    wavs = [torch.FloatTensor(wav).to(self.args.device) for wav in wavs]
-                    if self.upstream.trainable:
-                        features = self.upstream.model(wavs)
-                    else:
-                        with torch.no_grad():
-                            features = self.upstream.model(wavs)
-                    features = self.featurizer.model(wavs, features)
+                    if len(save_names) > 0:
+                        all_states = {
+                            'Optimizer': optimizer.state_dict(),
+                            'Step': global_step,
+                            'Epoch': epoch,
+                            'Args': self.args,
+                            'Config': self.config,
+                            'Optim_p': optim_p
+                        }
 
-                    if specaug:
-                        features, _ = specaug(features)
+                        for entry in self.all_entries:
+                            if entry.trainable:
+                                all_states[entry.name] = get_model_state(entry.model)
 
-                    loss = self.downstream.model(
-                        train_split,
-                        features, *others,
-                        records = records,
-                    )
-                    batch_ids.append(batch_id)
+                        if scheduler:
+                            all_states['Scheduler'] = scheduler.state_dict()
 
-                    gradient_accumulate_steps = self.config['runner'].get('gradient_accumulate_steps')
-                    (loss / gradient_accumulate_steps).backward()
-                    del loss
-
-                except RuntimeError as e:
-                    if 'CUDA out of memory' in str(e):
-                        print(f'[Runner] - CUDA out of memory at step {global_step}')
                         if is_initialized():
-                            raise
-                        with torch.cuda.device(self.args.device):
-                            torch.cuda.empty_cache()
-                        optimizer.zero_grad()
-                        continue
-                    else:
-                        raise
+                            all_states['WorldSize'] = get_world_size()
 
-                # whether to accumulate gradient
-                backward_steps += 1
-                if backward_steps % gradient_accumulate_steps > 0:
-                    continue
+                        save_paths = [os.path.join(self.args.expdir, name) for name in save_names]
+                        tqdm.write(f'[Runner] - Save the checkpoint to:')
+                        for i, path in enumerate(save_paths):
+                            tqdm.write(f'{i + 1}. {path}')
+                            torch.save(all_states, path)
 
-                # gradient clipping
-                grad_norm = torch.nn.utils.clip_grad_norm_(
-                    trainable_paras, self.config['runner']['gradient_clipping'])
-                # grad_norm = torch.nn.utils.clip_grad_norm_(
-                #     trainable_paras_list[min_idx], self.config['runner']['gradient_clipping'])
-
-                # optimize
-                if math.isnan(grad_norm):
-                    print(f'[Runner] - grad norm is NaN at step {global_step}')
-                else:
-                    optimizer.step()
-                optimizer.zero_grad()
-
-                # adjust learning rate
-                if scheduler:
-                    scheduler.step()
-
-                if not is_leader_process():
-                    batch_ids = []
-                    records = defaultdict(list)
-                    continue
-
-                # logging
-                if global_step % self.config['runner']['log_step'] == 0:
-                    self.downstream.model.log_records(
-                        train_split,
-                        records = records,
-                        logger = logger,
-                        global_step = global_step,
-                        batch_ids = batch_ids,
-                        total_batch_num = len(dataloader),
-                    )
-                    batch_ids = []
-                    records = defaultdict(list)
-
-                # evaluation and save checkpoint
-                save_names = []
-
-                if global_step % self.config['runner']['eval_step'] == 0:
-                    for split in self.config['runner']['eval_dataloaders']:
-                        save_names += self.evaluate(split, logger, global_step)
-
-                if global_step % self.config['runner']['save_step'] == 0:
-                    def check_ckpt_num(directory):
-                        max_keep = self.config['runner']['max_keep']
-                        ckpt_pths = glob.glob(f'{directory}/states-*.ckpt')
-                        if len(ckpt_pths) >= max_keep:
-                            ckpt_pths = sorted(ckpt_pths, key=lambda pth: int(pth.split('-')[-1].split('.')[0]))
-                            for ckpt_pth in ckpt_pths[:len(ckpt_pths) - max_keep + 1]:
-                                os.remove(ckpt_pth)
-                    check_ckpt_num(self.args.expdir)
-                    save_names.append(f'states-{global_step}.ckpt')
-
-                if len(save_names) > 0:
-                    all_states = {
-                        'Optimizer': optimizer.state_dict(),
-                        'Step': global_step,
-                        'Epoch': epoch,
-                        'Args': self.args,
-                        'Config': self.config,
-                    }
-
-                    for entry in self.all_entries:
-                        if entry.trainable:
-                            all_states[entry.name] = get_model_state(entry.model)
-
-                    if scheduler:
-                        all_states['Scheduler'] = scheduler.state_dict()
-
-                    if is_initialized():
-                        all_states['WorldSize'] = get_world_size()
-
-                    save_paths = [os.path.join(self.args.expdir, name) for name in save_names]
-                    tqdm.write(f'[Runner] - Save the checkpoint to:')
-                    for i, path in enumerate(save_paths):
-                        tqdm.write(f'{i + 1}. {path}')
-                        torch.save(all_states, path)
-
-                pbar.update(1)
+                    pbar.update(1)
             epoch += 1
 
         pbar.close()
