@@ -146,7 +146,6 @@ class Runner():
             self.featurizers = [self.featurizer_1, self.featurizer_2, self.featurizer_3, self.featurizer_4] # 
             self.downstreams = [self.downstream_1, self.downstream_2, self.downstream_3, self.downstream_4] # 
 
-
             self.all_subnets_all_entries = [self.all_entries_1, self.all_entries_2, self.all_entries_3, self.all_entries_4] #
         else:
             self.upstream = self._get_upstream()
@@ -389,6 +388,8 @@ class Runner():
         return grad_masks
 
     def train(self):
+
+        assert len(self.config['optimizer']['reserve_p']) == len(self.all_subnets_all_entries) , "Please check the num of candidate P and network is equal"
         # trainable parameters and train/eval mode
         trainable_models_list = []
         trainable_paras_list = []
@@ -398,7 +399,6 @@ class Runner():
             trainable_paras = []
             for entry in all_entries:
                 if entry.trainable:
-
                     entry.model.train()
                     trainable_models.append(entry.model)
                     trainable_paras += list(entry.model.parameters())
@@ -440,7 +440,9 @@ class Runner():
         records = [defaultdict(list) for i in range(len(self.all_subnets_all_entries))]
         selete_p = self.init_ckpt.get('Optim_p', -1)
         min_idx = 0
-        strive_steps = self.config['runner']['total_steps'] * 0.1
+        strive_ratio = self.config['runner'].get(['strive_ratio'], 0.1)
+        strive_steps = self.config['runner']['total_steps'] * strive_ratio
+        print(f"-------------------------strive_ratio : {strive_steps}----------------------")
         batch_ids = []
         backward_steps = 0
         # =================== HACK BEGIN =======================   
@@ -596,7 +598,7 @@ class Runner():
                         batch_ids = []
                         records = [defaultdict(list) for j in range(len(self.all_subnets_all_entries))]
                     
-                    if global_step == strive_steps:    #选则最优的p
+                    if pbar.n == strive_steps:    #选则最优的p
                         min_idx = smoothed_value.index(min(smoothed_value))
                         self.upstream = self.upstreams[min_idx]
                         self.featurizer = self.featurizers[min_idx]
