@@ -126,10 +126,8 @@ class Runner():
             self.all_entries_1 = [self.upstream_1, self.featurizer_1, self.downstream_1]
             
             #deepcopy upstream模型forward为空，不知道为什么
-            random_state = get_random_state()
 
             self.upstream_2 = self._get_upstream()
-
             self.featurizer_2 = self._get_featurizer(self.upstream_2)
             self.downstream_2 = self._get_downstream(self.featurizer_2)
             self.all_entries_2 = [self.upstream_2, self.featurizer_2, self.downstream_2]
@@ -142,7 +140,7 @@ class Runner():
             self.upstreams = [self.upstream_1, self.upstream_2, self.upstream_3] #
             self.featurizers = [self.featurizer_1, self.featurizer_2, self.featurizer_3] # 
             self.downstreams = [self.downstream_1, self.downstream_2, self.downstream_3] # 
-            set_random_state(random_state)
+
 
             self.all_subnets_all_entries = [self.all_entries_1, self.all_entries_2, self.all_entries_3] #
         else:
@@ -408,7 +406,7 @@ class Runner():
 
         # scheduler
         #scheduler = None
-        schedulers = [None, None, None]
+        schedulers = [None for i in range(len(self.all_subnets_all_entries))]
         if self.config.get('scheduler'):
             #scheduler = self._get_scheduler(optimizer)
             schedulers = [self._get_scheduler(optimizer) for optimizer in optimizers]
@@ -434,8 +432,12 @@ class Runner():
         epoch = self.init_ckpt.get('Epoch', 0)
         optim_p = None
         train_split = self.config['runner'].get("train_dataloader", "train")
-        records = [defaultdict(list), defaultdict(list), defaultdict(list)]
+        records = [defaultdict(list) for i in range(len(self.all_subnets_all_entries))]
         selete_p = self.init_ckpt.get('Optim_p', -1)
+        min_idx = 0
+        strive_steps = self.config['runner']['total_steps'] * 0.1
+        batch_ids = []
+        backward_steps = 0
         # =================== HACK BEGIN =======================   
         #get_fisher_mask & set mask
         if self.args.tuning_mode == "subnet":
@@ -445,9 +447,8 @@ class Runner():
                 optimizers[i].set_grad_mask(grad_masks[i])
             if self.upstreams[0].trainable:
                 print("upstream is tuning")
-            if selete_p != -1:
+            if selete_p != -1:  #resume
                 min_idx = self.config['optimizer']['reserve_p'].index(selete_p)
-
                 self.upstream = self.upstreams[min_idx]
                 self.featurizer = self.featurizers[min_idx]
                 self.downstream = self.downstreams[min_idx]
@@ -468,16 +469,12 @@ class Runner():
         # =================== HACK BEGIN =======================  
         # model-seletion dependon on training loss
         # =================== HACK END =========================  
-        min_idx = 0
-        strive_steps = self.config['runner']['total_steps'] * 0.1
-        epoch = self.init_ckpt.get('Epoch', 0)
-        batch_ids = []
-        backward_steps = 0
+
 
         # 定义滑动平均系数
         alpha = 0.6
-        last = [0, 0, 0]
-        smoothed_value = [0, 0, 0]
+        last = [0 for i in range(len(self.all_subnets_all_entries))]
+        smoothed_value = [0 for i in range(len(self.all_subnets_all_entries))]
         num_acc = 0
         
         global_step = 0
@@ -565,7 +562,7 @@ class Runner():
 
                         if not is_leader_process():
                             batch_ids = []
-                            records = [defaultdict(list), defaultdict(list), defaultdict(list)]
+                            records = [defaultdict(list) for j in range(len(self.all_subnets_all_entries))]
                             continue
                         if i == 0:
                             pbar.update(1)
@@ -592,7 +589,7 @@ class Runner():
                             smoothed_value[i] = last[i] / debias_weight
                         print("smoothed_value : ", smoothed_value)
                         batch_ids = []
-                        records = [defaultdict(list), defaultdict(list), defaultdict(list)]
+                        records = [defaultdict(list) for j in range(len(self.all_subnets_all_entries))]
                     
                     if global_step == strive_steps:    #选则最优的p
                         min_idx = smoothed_value.index(min(smoothed_value))
