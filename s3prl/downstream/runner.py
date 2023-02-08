@@ -137,12 +137,17 @@ class Runner():
             self.downstream_3 = self._get_downstream(self.featurizer_3)
             self.all_entries_3 = [self.upstream_3, self.featurizer_3, self.downstream_3]
 
-            self.upstreams = [self.upstream_1, self.upstream_2, self.upstream_3] #
-            self.featurizers = [self.featurizer_1, self.featurizer_2, self.featurizer_3] # 
-            self.downstreams = [self.downstream_1, self.downstream_2, self.downstream_3] # 
+            self.upstream_4 = self._get_upstream()
+            self.featurizer_4 = self._get_featurizer(self.upstream_4)
+            self.downstream_4 = self._get_downstream(self.featurizer_4)
+            self.all_entries_4 = [self.upstream_4, self.featurizer_4, self.downstream_4]
+
+            self.upstreams = [self.upstream_1, self.upstream_2, self.upstream_3, self.upstream_4] #
+            self.featurizers = [self.featurizer_1, self.featurizer_2, self.featurizer_3, self.featurizer_4] # 
+            self.downstreams = [self.downstream_1, self.downstream_2, self.downstream_3, self.downstream_4] # 
 
 
-            self.all_subnets_all_entries = [self.all_entries_1, self.all_entries_2, self.all_entries_3] #
+            self.all_subnets_all_entries = [self.all_entries_1, self.all_entries_2, self.all_entries_3, self.all_entries_4] #
         else:
             self.upstream = self._get_upstream()
             self.featurizer = self._get_featurizer(self.upstream)
