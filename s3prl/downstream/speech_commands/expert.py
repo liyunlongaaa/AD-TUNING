@@ -47,7 +47,7 @@ class DownstreamExpert(nn.Module):
         self.objective = nn.CrossEntropyLoss()
         self.expdir = expdir
         self.register_buffer('best_score', torch.zeros(1))
-        self.register_buffer('best_test_score', torch.zeros(1))
+
 
     def _get_balanced_train_dataloader(self, dataset, drop_last=False):
         sampler = WeightedRandomSampler(dataset.sample_weights, len(dataset.sample_weights))

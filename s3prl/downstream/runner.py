@@ -114,7 +114,6 @@ class Runner():
         self.args = args
         self.config = config
         self.init_ckpt = torch.load(self.args.init_ckpt, map_location='cpu') if self.args.init_ckpt else {}
-
         
         if args.mode == 'train':
             self.upstream, self.featurizer, self.downstream,  self.all_entries = None, None, None, None
@@ -440,7 +439,7 @@ class Runner():
         records = [defaultdict(list) for i in range(len(self.all_subnets_all_entries))]
         selete_p = self.init_ckpt.get('Optim_p', -1)
         min_idx = 0
-        strive_ratio = self.config['runner'].get(['strive_ratio'], 0.1)
+        strive_ratio = self.config['runner'].get('strive_ratio', 0.1)
         strive_steps = self.config['runner']['total_steps'] * strive_ratio
         print(f"-------------------------strive_ratio : {strive_steps}----------------------")
         batch_ids = []
@@ -486,7 +485,8 @@ class Runner():
         
         global_step = 0
         strive_bar = tqdm(total=strive_steps, dynamic_ncols=True, desc=f'strive', file=tqdm_file)
-
+        #可视化
+        log_losses = [[] for i in range(len(self.all_subnets_all_entries))]
         while pbar.n < pbar.total:
             try:
                 dataloader = self.downstreams[0].model.get_dataloader(train_split, epoch=epoch)
@@ -592,6 +592,7 @@ class Runner():
                             )
                             print("cur value", sum(records[i]["loss"]) / len(records[i]["loss"]))
                             cur_value = sum(records[i]["loss"]) / len(records[i]["loss"])
+                            log_losses[i].append(cur_value)
                             last[i] = alpha * last[i] + (1 - alpha) * cur_value
                             smoothed_value[i] = last[i] / debias_weight
                         print("smoothed_value : ", smoothed_value)
@@ -614,8 +615,11 @@ class Runner():
                                 exec(f"del self.upstream_{i+1}")
                                 exec(f"del self.featurizer_{i+1}")
                                 exec(f"del self.downstream_{i+1}")
+                                loss_path = os.path.join(self.args.expdir, 'loss_' + str(self.config['optimizer']['reserve_p'][i]))
+                                np.save(f'{loss_path}.npy', np.array(log_losses[i]))
                         optim_p = self.config['optimizer']['reserve_p'][min_idx]
                         print(f"selete p => {self.config['optimizer']['reserve_p'][min_idx]}")
+
                             
                 else:
                     try:
@@ -750,7 +754,8 @@ class Runner():
 
     def evaluate(self, split=None, logger=None, global_step=0):
         """evaluate function will always be called on a single process even during distributed training"""
-
+        if 'Optim_p' in self.init_ckpt:
+            print('cur_p is ', self.init_ckpt['Optim_p'])
         # When this member function is called directly by command line
         not_during_training = split is None and logger is None and global_step == 0
         if not_during_training:
