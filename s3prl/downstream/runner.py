@@ -441,7 +441,9 @@ class Runner():
         min_idx = 0
         strive_ratio = self.config['runner'].get('strive_ratio', 0.1)
         strive_steps = self.config['runner']['total_steps'] * strive_ratio
-        print(f"-------------------------strive_ratio : {strive_steps}----------------------")
+        observation = self.config['runner'].get('observation', 'loss')
+        print(f"-------------------------strive_ratio : {strive_steps}  observation : {observation}----------------------")
+
         batch_ids = []
         backward_steps = 0
         # =================== HACK BEGIN =======================   
@@ -590,8 +592,8 @@ class Runner():
                             batch_ids = batch_ids,
                             total_batch_num = len(dataloader),
                             )
-                            print("cur value", sum(records[i]["loss"]) / len(records[i]["loss"]))
-                            cur_value = sum(records[i]["loss"]) / len(records[i]["loss"])
+                            print("cur value", sum(records[i][observation]) / len(records[i][observation]))
+                            cur_value = sum(records[i][observation]) / len(records[i][observation])
                             log_losses[i].append(cur_value)
                             last[i] = alpha * last[i] + (1 - alpha) * cur_value
                             smoothed_value[i] = last[i] / debias_weight
