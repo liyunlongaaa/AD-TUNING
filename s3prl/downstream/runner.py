@@ -609,7 +609,7 @@ class Runner():
 
                     if global_step % self.config['runner']['eval_step'] == 0:
                         for split in self.config['runner']['eval_dataloaders']:
-                            self.evaluate(split, logger, global_step)
+                            self.strive_evaluate(self.upstreams[i], self.featurizers[i], self.downstreams[i], self.all_subnets_all_entries[i], split, logger, global_step)
 
 
                     if pbar.n == strive_steps:    #选则最优的p
@@ -828,9 +828,6 @@ class Runner():
             total_batch_num = len(dataloader),
         )
 
-        if self.ob_mode == 'dev':
-            self.dev_score.append(torch.FloatTensor(records[self.ob_target]).mean().item())
-
         batch_ids = []
         records = defaultdict(list)
 
@@ -849,6 +846,84 @@ class Runner():
 
         return [] if type(save_names) is not list else save_names
 
+    def strive_evaluate(self, upstream, featurizer, downstream, all_entries, split=None, logger=None, global_step=0):
+        """evaluate function will always be called on a single process even during distributed training"""
+        
+        # When this member function is called directly by command line
+        not_during_training = split is None and logger is None and global_step == 0
+        if not_during_training:
+            split = self.args.evaluate_split
+            tempdir = tempfile.mkdtemp()
+            logger = SummaryWriter(tempdir)
+
+        # fix seed to guarantee the same evaluation protocol across steps 
+        random.seed(self.args.seed)
+        np.random.seed(self.args.seed)
+        torch.manual_seed(self.args.seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(self.args.seed)
+            with torch.cuda.device(self.args.device):
+                torch.cuda.empty_cache()
+
+        # record original train/eval states and set all models to eval
+        trainings = []
+        for entry in all_entries:
+            trainings.append(entry.model.training)
+            entry.model.eval()
+
+        # prepare data
+        dataloader = downstream.model.get_dataloader(split)
+        evaluate_ratio = float(self.config["runner"].get("evaluate_ratio", 1))
+        evaluate_steps = round(len(dataloader) * evaluate_ratio)
+
+        batch_ids = []
+        records = defaultdict(list)
+        for batch_id, (wavs, *others) in enumerate(tqdm(dataloader, dynamic_ncols=True, desc=split, total=evaluate_steps)):
+            if batch_id > evaluate_steps:
+                break
+
+            wavs = [torch.FloatTensor(wav).to(self.args.device) for wav in wavs]
+            with torch.no_grad():
+                features = upstream.model(wavs)
+                features = featurizer.model(wavs, features)
+                downstream.model(
+                    split,
+                    features, *others,
+                    records = records,
+                    batch_id = batch_id,
+                )
+                batch_ids.append(batch_id)
+
+        save_names = self.downstream.model.log_records(
+            split,
+            records = records,
+            logger = logger,
+            global_step = global_step,
+            batch_ids = batch_ids,
+            total_batch_num = len(dataloader),
+        )
+
+        if self.ob_mode == 'dev':
+            self.dev_score.append(torch.FloatTensor(records[self.ob_target]).mean().item())
+
+        batch_ids = []
+        records = defaultdict(list)
+
+        # prepare back to training
+        if torch.cuda.is_available():
+            with torch.cuda.device(self.args.device):
+                torch.cuda.empty_cache()
+
+        for entry, training in zip(all_entries, trainings):
+            if training:
+                entry.model.train()
+
+        if not_during_training:
+            logger.close()
+            shutil.rmtree(tempdir)
+
+        
+    
     def inference(self):
         filepath = Path(self.args.evaluate_split)
         assert filepath.is_file(), filepath
