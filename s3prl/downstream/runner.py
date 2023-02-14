@@ -146,11 +146,16 @@ class Runner():
             self.downstreams = [self.downstream_1, self.downstream_2, self.downstream_3] # 
 
             self.all_subnets_all_entries = [self.all_entries_1, self.all_entries_2, self.all_entries_3] #
+
         else:
             self.upstream = self._get_upstream()
             self.featurizer = self._get_featurizer(self.upstream)
             self.downstream = self._get_downstream(self.featurizer)
             self.all_entries = [self.upstream, self.featurizer, self.downstream]
+
+        self.dev_score = []
+        self.ob_mode = self.config['runner'].get('observation', ['train', 'loss'])[0]
+        self.ob_target = self.config['runner'].get('observation', ['train', 'loss'])[1]
 
     def _load_weight(self, model, name):
         init_weight = self.init_ckpt.get(name)
@@ -441,7 +446,7 @@ class Runner():
         min_idx = 0
         strive_ratio = self.config['runner'].get('strive_ratio', 0.1)
         strive_steps = self.config['runner']['total_steps'] * strive_ratio
-        observation = self.config['runner'].get('observation', 'loss')
+        observation = 'loss'
         print(f"-------------------------strive_ratio : {strive_steps}  observation : {observation}----------------------")
 
         batch_ids = []
@@ -601,8 +606,19 @@ class Runner():
                         batch_ids = []
                         records = [defaultdict(list) for j in range(len(self.all_subnets_all_entries))]
                     
+
+                    if global_step % self.config['runner']['eval_step'] == 0:
+                        for split in self.config['runner']['eval_dataloaders']:
+                            self.evaluate(split, logger, global_step)
+
+
                     if pbar.n == strive_steps:    #选则最优的p
-                        min_idx = smoothed_value.index(min(smoothed_value))
+                        if self.ob_mode == 'train':  # train loss
+                            min_idx = smoothed_value.index(min(smoothed_value))
+                        elif self.ob_mode == 'dev':   #dev acc
+                            can_val = [self.dev_score[-3], self.dev_score[-2], self.dev_score[-1]]
+                            min_idx = can_val.index(max(can_val))
+                            
                         self.upstream = self.upstreams[min_idx]
                         self.featurizer = self.featurizers[min_idx]
                         self.downstream = self.downstreams[min_idx]
@@ -811,6 +827,10 @@ class Runner():
             batch_ids = batch_ids,
             total_batch_num = len(dataloader),
         )
+
+        if self.ob_mode == 'dev':
+            self.dev_score.append(torch.FloatTensor(records[self.ob_target]).mean().item())
+
         batch_ids = []
         records = defaultdict(list)
 
