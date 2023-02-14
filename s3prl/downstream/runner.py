@@ -157,6 +157,8 @@ class Runner():
         self.ob_mode = self.config['runner'].get('observation', ['train', 'loss'])[0]
         self.ob_target = self.config['runner'].get('observation', ['train', 'loss'])[1]
 
+        print('-------------------', self.ob_mode, self.ob_target, '-------------------')
+
     def _load_weight(self, model, name):
         init_weight = self.init_ckpt.get(name)
         if init_weight:
@@ -581,6 +583,9 @@ class Runner():
                         if i == 0:
                             pbar.update(1)
                             strive_bar.update(1)
+                        
+                        if global_step % self.config['runner']['eval_step'] == 0:
+                            self.strive_evaluate(self.upstreams[i], self.featurizers[i], self.downstreams[i], self.all_subnets_all_entries[i], 'dev', logger, global_step)
 
                     # logging
                     if global_step % self.config['runner']['log_step'] == 0:
@@ -604,12 +609,7 @@ class Runner():
                             smoothed_value[i] = last[i] / debias_weight
                         print("smoothed_value : ", smoothed_value)
                         batch_ids = []
-                        records = [defaultdict(list) for j in range(len(self.all_subnets_all_entries))]
-                    
-
-                    if global_step % self.config['runner']['eval_step'] == 0:
-                        for split in self.config['runner']['eval_dataloaders']:
-                            self.strive_evaluate(self.upstreams[i], self.featurizers[i], self.downstreams[i], self.all_subnets_all_entries[i], split, logger, global_step)
+                        records = [defaultdict(list) for j in range(len(self.all_subnets_all_entries))]                  
 
 
                     if pbar.n == strive_steps:    #选则最优的p
@@ -894,7 +894,7 @@ class Runner():
                 )
                 batch_ids.append(batch_id)
 
-        save_names = self.downstream.model.log_records(
+        save_names = downstream.model.log_records(
             split,
             records = records,
             logger = logger,
@@ -905,7 +905,7 @@ class Runner():
 
         if self.ob_mode == 'dev':
             self.dev_score.append(torch.FloatTensor(records[self.ob_target]).mean().item())
-
+            print('cur dev_score : ', self.dev_score)
         batch_ids = []
         records = defaultdict(list)
 
