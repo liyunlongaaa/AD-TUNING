@@ -615,7 +615,7 @@ class Runner():
                     if pbar.n == strive_steps:    #选则最优的p
                         if self.ob_mode == 'train':  # train loss
                             min_idx = smoothed_value.index(min(smoothed_value))
-                        elif self.ob_mode == 'dev':   #dev acc
+                        elif self.ob_mode == 'dev':   #dev acc or f1
                             can_val = [self.dev_score[-3], self.dev_score[-2], self.dev_score[-1]]
                             min_idx = can_val.index(max(can_val))
                             

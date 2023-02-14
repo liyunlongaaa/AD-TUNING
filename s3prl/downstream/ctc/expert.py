@@ -121,7 +121,7 @@ class DownstreamExpert(nn.Module):
         save_names = []
         for key, value in results.items():
             print(f"{split} {key}: {value}")
-
+            records[key] = value                         #hack code
             logger.add_scalar(
                 f"{self._get_task_name()}/{split}-{key}", value, global_step=global_step
             )
