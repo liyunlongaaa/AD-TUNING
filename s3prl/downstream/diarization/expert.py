@@ -256,9 +256,9 @@ class DownstreamExpert(nn.Module):
         # here we flatten logits and labels in order to apply nn.CrossEntropyLoss
         class_num = predicted.size(-1)
         #print('predicted[0]',predicted[0])
-        loss, perm_idx, perm_list = self.objective(predicted, labels, lengths) #返回最小的permutation的loss
+        loss, perm_idx, perm_list = self.objective(predicted, labels, lengths) #返回最小的permutation的loss 和 perm_idx
         # get the best label permutation
-        label_perm = get_label_perm(labels, perm_idx, perm_list)   #确定计算loss时用到的label的permutation，同一个batch里可以用不同的permutation计算Loss，只取最小的
+        label_perm = get_label_perm(labels, perm_idx, perm_list)   #确定计算loss时用到的label的permutation，同一个batch里可以用不同的permutation计算Loss，只取最小的，用来计算评分。其实也可以对predicted取对应的perm。
         # print(label_perm.shape)
         # exit()
         (
@@ -295,13 +295,13 @@ class DownstreamExpert(nn.Module):
         records["acc"] += [ACC]
         records["der"] += [DER]
 
-        if mode == "test" and self.save_predictions:
+        if mode == "test" and self.save_predictions:   #这段代码将处理后的模型预测结果以概率形式保存到hdf5文件中。
             predict = predicted.data.cpu().numpy()
             predict = np.vstack(list(predict))
             predict = 1 / (1 + np.exp(-predict))
             outpath = os.path.join(self.score_dir, "predictions", rec_id + ".h5")
             with h5py.File(outpath, "w") as wf:
-                wf.create_dataset("T_hat", data=predict)
+                wf.create_dataset("T_hat", data=predict)  #T_hat是名称
         return loss
 
     # interface

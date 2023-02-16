@@ -74,7 +74,7 @@ def calc_diarization_error(pred, label, length):
 
     # pred and label have the shape (batch_size, max_len, num_output)
     label_np = label.data.cpu().numpy().astype(int)
-    pred_np = (pred.data.cpu().numpy() > 0).astype(int)  #0，1标签化
+    pred_np = (pred.data.cpu().numpy() > 0).astype(int)  #0，1标签化， >0表示有声音？ 感觉怪怪的，downExpert激活函数也不是tanh
     label_np = label_np * mask
     pred_np = pred_np * mask
     length = length.data.cpu().numpy()
@@ -90,8 +90,16 @@ def calc_diarization_error(pred, label, length):
     speaker_scored = float(np.sum(n_ref))       #说话总段数
     speaker_miss = float(np.sum(np.maximum(n_ref - n_sys, 0))) #有人声音但没预测出来
     speaker_falarm = float(np.sum(np.maximum(n_sys - n_ref, 0)))
-    n_map = np.sum(np.logical_and(label_np == 1, pred_np == 1), axis=2)
+
+    n_map = np.sum(np.logical_and(label_np == 1, pred_np == 1), axis=2)  #这两个有点牛逼 [0, 1] [1, 0] (或反过来才)算speaker_error
     speaker_error = float(np.sum(np.minimum(n_ref, n_sys) - n_map))
+    # 上面这两段代码是在计算模型的预测结果与标签之间的差异（即错误）。
+
+    # 第一行代码使用numpy的逻辑运算函数和sum函数计算两个布尔数组（label_np和pred_np）的逻辑与（AND）结果，然后沿着第三个维度（axis=2）对结果求和，最终得到一个表示真实标签和模型预测结果中同时为1的元素个数的矩阵。这个矩阵称为交集计数矩阵，用于衡量模型预测的说话人分割中正确的部分。具体来说，逻辑与操作将两个数组的值同时为1的位置设置为True，其余位置设置为False，求和后得到的结果就是两个数组同时为1的元素个数。
+
+    # 第二行代码首先使用numpy的minimum函数计算两个标量的最小值，然后使用numpy的sum函数计算这些最小值的和，最终得到一个标量表示标签中的说话人数量与模型预测结果中的说话人数量之间的最小值的总和。这个值用于衡量模型预测的说话人分割中的错误部分。
+
+    # 综上，这两行代码计算了模型预测结果中正确的说话人分割数量以及错误的说话人分割数量，用于评估模型在语音分割任务上的性能。
     correct = float(1.0 * np.sum((label_np == pred_np) * mask) / num_output)
     num_frames = np.sum(length)
     return (

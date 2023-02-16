@@ -97,6 +97,15 @@ def set_random_state(state):
     np.random.set_state(np_rng_state)
     random.setstate(random_state)
 
+def cal_params_diff(model1, model2):
+    ddc = 0
+    ttc = 0
+    for (n1, p1), (n2,p2) in zip(model1.model.named_parameters(), model2.model.named_parameters()):
+        ddc += torch.sum((p1 != p2).float()).item()
+        ttc += p1.numel()
+    print(ddc / ttc)
+    return ddc / ttc
+
 class ModelEntry:
     def __init__(self, model, name, trainable, interfaces):
         self.model = model
@@ -117,6 +126,7 @@ class Runner():
         
         if args.mode == 'train':
             self.upstream, self.featurizer, self.downstream,  self.all_entries = None, None, None, None
+            self.upstream = self._get_upstream()
 
             self.upstream_1 = self._get_upstream()
 
@@ -304,20 +314,34 @@ class Runner():
         if self.config.get('specaug'):
             from .specaug import SpecAug
             specaug = SpecAug(**self.config["specaug"])
-        
-        for name, params in self.upstreams[0].model.named_parameters():
 
-            if 'encoder.layers' in name or 'layer_norm' in name:
-                print("encoder.layers or layer_norm : ", name)
-                for i in range(len(self.all_subnets_all_entries)):
-                    grad_masks[i][params] = params.new_zeros(params.size())
-                tuning_pcount += params.numel()
-            else:
-                print('frozen: ', name)      
-                params.requires_grad = False
+        for idx, (named_parameters, grad_mask) in enumerate(zip((up.model.named_parameters() for up in self.upstreams), grad_masks)):
+            print(idx, named_parameters, grad_mask)
+            for name, params in named_parameters:
+                if 'encoder.layers' in name or 'layer_norm' in name:
+                    if idx == 0:
+                        print(f"encoder.layers or layer_norm : {name}")
+                    grad_mask[params] = params.new_zeros(params.size())
+                else:
+                    print('frozen: ', name)      
+                    params.requires_grad = False   
+                if 'final_proj'  not in name:
+                    pcount += params.numel()
 
-            if 'final_proj'  not in name:
-                pcount += params.numel()
+        # for (name_1, params_1), (name_2, params_2), (name_3, params_3) in zip(self.upstreams[0].model.named_parameters(), self.upstreams[1].model.named_parameters(), self.upstreams[2].model.named_parameters()):    #bug !!! dif model have diff param
+
+        #     if 'encoder.layers' in name_1 or 'layer_norm' in name_1:
+        #         print("encoder.layers or layer_norm : ", name_1)
+        #         grad_masks[0][params_1] = params_1.new_zeros(params_1.size())
+        #         grad_masks[1][params_2] = params_1.new_zeros(params_2.size())
+        #         grad_masks[2][params_3] = params_1.new_zeros(params_3.size())
+        #         tuning_pcount += params_1.numel()
+        #     else:
+        #         print('frozen: ', name_1)      
+        #         params_1.requires_grad = False
+
+        #     if 'final_proj'  not in name_1:
+        #         pcount += params_1.numel()
         
         tuning_pcount *= np.array(self.config['optimizer']['reserve_p'])
 
@@ -350,16 +374,19 @@ class Runner():
                 gradient_accumulate_steps = self.config['runner'].get('gradient_accumulate_steps')
                 (loss / gradient_accumulate_steps).backward()
 
-                for name, params in self.upstreams[0].model.named_parameters():
-                    if 'encoder.layers' in name or 'layer_norm' in name: #应该laynorn也，不过影响不大
-                        torch.nn.utils.clip_grad_norm_(params, self.config['runner']['gradient_clipping'])
-                        fisher_item = (params.grad ** 2) / N 
-                        for grad_mask in grad_masks:
-                            grad_mask[params] += fisher_item              #累计梯度
-
+                for (name_1, params_1), (name_2, params_2), (name_3, params_3) in zip(self.upstreams[0].model.named_parameters(), self.upstreams[1].model.named_parameters(), self.upstreams[2].model.named_parameters()): 
+                    if 'encoder.layers' in name_1 or 'layer_norm' in name_1: #应该laynorn也，不过影响不大
+                        torch.nn.utils.clip_grad_norm_(params_1, self.config['runner']['gradient_clipping'])
+                        fisher_item = (params_1.grad ** 2) / N 
+                        grad_masks[0][params_1] += fisher_item
+                        grad_masks[1][params_2] += grad_masks[0][params_1]
+                        grad_masks[2][params_3] += grad_masks[0][params_1]
+                        # for grad_mask in grad_masks:
+                        #     grad_mask[params] += fisher_item              #累计梯度
+                
                 self.upstreams[0].model.zero_grad()         
                 for entry in self.all_subnets_all_entries[0]:
-                        entry.model.zero_grad()
+                    entry.model.zero_grad()
                 del loss
             except RuntimeError as e:
                     if 'CUDA out of memory' in str(e):
@@ -377,18 +404,24 @@ class Runner():
 
         # Numpy
         r = None
-        for k, v in grad_masks[0].items():
+        for k, v in grad_masks[2].items():
             v = v.view(-1).cpu().numpy()
             if r is None:
                 r = v
             else:
                 r = np.append(r, v)
+        
         polars = [np.percentile(r, (1-reserve_p)*100) for reserve_p in self.config['optimizer']['reserve_p']]
         for i, grad_mask in enumerate(grad_masks):
             for k in grad_mask:
                 grad_mask[k] = grad_mask[k] >= polars[i]
         print('candidate P => {}; Polar => {}'.format(self.config['optimizer']['reserve_p'], polars))
-
+        # sum = [0, 0, 0]
+        # for i, grad_mask in enumerate(grad_masks):   
+        #     for k in grad_mask:
+        #         sum[i] += (grad_mask[k] == True).sum()
+        # print(sum)
+        # exit()             #折没问题
         # TODO: pytorch: torch.kthvalue
         
         return grad_masks
@@ -460,6 +493,7 @@ class Runner():
             grad_masks = self.get_fisher_mask()
             for i in range(len(optimizers)):
                 optimizers[i].set_grad_mask(grad_masks[i])
+
             if self.upstreams[0].trainable:
                 print("upstream is tuning")
             if selete_p != -1:  #resume
@@ -571,7 +605,8 @@ class Runner():
                         else:
                             optimizers[i].step()
                         optimizers[i].zero_grad()
-
+                        #print('-------------------------------')
+                        #cal_params_diff(self.upstreams[i], self.upstream)
                         # adjust learning rate
                         if schedulers[i]:
                             schedulers[i].step()
@@ -585,7 +620,7 @@ class Runner():
                             strive_bar.update(1)
                         
                         if global_step % self.config['runner']['eval_step'] == 0:
-                            self.strive_evaluate(self.upstreams[i], self.featurizers[i], self.downstreams[i], self.all_subnets_all_entries[i], 'dev', logger, global_step)
+                            self.strive_evaluate(self.upstreams[i], self.featurizers[i], self.downstreams[i], self.all_subnets_all_entries[i], self.config['runner']['eval_dataloaders'][0], logger, global_step)
 
                     # logging
                     if global_step % self.config['runner']['log_step'] == 0:

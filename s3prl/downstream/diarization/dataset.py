@@ -47,7 +47,7 @@ def _gen_frame_indices(
     i = -1
     for i in range(_count_frames(data_length, size, step)):
         yield i * step, i * step + size
-    if use_last_samples and i * step + size < data_length:
+    if use_last_samples and i * step + size < data_length:  #如果 use_last_samples 为 True 并且最后一帧没有被包含，函数会再生成一组帧索引
         if data_length - (i + 1) * step - subsampling * label_delay > 0:
             yield (i + 1) * step, data_length
 
@@ -109,7 +109,7 @@ class DiarizationDataset(Dataset):
                     subsampling=self.subsampling,
                 ):
                     self.chunk_indices.append(
-                        (rec, st * self.subsampling, ed * self.subsampling)
+                        (rec, st * self.subsampling, ed * self.subsampling)    #训的时候可能下采样，而且是把所以语料分chunk作为列表，不是test时的字典
                     )
             else:
                 for st, ed in _gen_chunk_indices(data_len, chunk_size):
@@ -246,7 +246,12 @@ class KaldiData:
         self.wavs = self._load_wav_scp(os.path.join(self.data_dir, "wav.scp"))
         self.reco2dur = self._load_reco2dur(os.path.join(self.data_dir, "reco2dur"))
         self.spk2utt = self._load_spk2utt(os.path.join(self.data_dir, "spk2utt"))
-
+        # text 这个文件可以看成一个map，key是utterance id，value是utterance的词序列(词之间用空格分开)。
+        # spk2gender 说话人(speaker)id到性别的map。
+        # spk2utt 某个说话人的所有utternace id
+        # utt2spk 某个utterance的说话人，前面的spk2utt可以由这个文件生成(当然反过来也行)
+        # wav.scp 这是Kaldi提取特征时真正用到的文件，这个文件的第一列是utterance id，第二列是扩展文件名(extended filename)，扩展文件名可以是普通的文件路径，也可以是一些命令行的输出，更多扩展文件名的信息请参考这里。我们这里可以先把第二列当作录音文件的路径。
+        # segments 格式是 mix_id_start_end mix_id start end
     def load_wav(self, recid, start=0, end=None):
         """Load wavfile given recid, start time and end time."""
         data, rate = self._load_wav(self.wavs[recid], start, end)
