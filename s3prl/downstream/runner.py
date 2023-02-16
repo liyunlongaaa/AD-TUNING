@@ -321,12 +321,14 @@ class Runner():
                 if 'encoder.layers' in name or 'layer_norm' in name:
                     if idx == 0:
                         print(f"encoder.layers or layer_norm : {name}")
+                        tuning_pcount += params.numel()
                     grad_mask[params] = params.new_zeros(params.size())
                 else:
                     print('frozen: ', name)      
                     params.requires_grad = False   
                 if 'final_proj'  not in name:
-                    pcount += params.numel()
+                    if idx == 0:
+                        pcount += params.numel()
 
         # for (name_1, params_1), (name_2, params_2), (name_3, params_3) in zip(self.upstreams[0].model.named_parameters(), self.upstreams[1].model.named_parameters(), self.upstreams[2].model.named_parameters()):    #bug !!! dif model have diff param
 
@@ -379,8 +381,8 @@ class Runner():
                         torch.nn.utils.clip_grad_norm_(params_1, self.config['runner']['gradient_clipping'])
                         fisher_item = (params_1.grad ** 2) / N 
                         grad_masks[0][params_1] += fisher_item
-                        grad_masks[1][params_2] += grad_masks[0][params_1]
-                        grad_masks[2][params_3] += grad_masks[0][params_1]
+                        grad_masks[1][params_2] = grad_masks[0][params_1]
+                        grad_masks[2][params_3] = grad_masks[0][params_1]
                         # for grad_mask in grad_masks:
                         #     grad_mask[params] += fisher_item              #累计梯度
                 
@@ -556,11 +558,6 @@ class Runner():
                             else:
                                 with torch.no_grad():
                                     features = self.upstreams[i].model(wavs)
-
-                            # print(features)
-                            # for na, pa in self.upstreams[i].model.named_parameters():
-                            #     print(pa)
-                            #     break
  
                             features = self.featurizers[i].model(wavs, features)
 
@@ -605,8 +602,8 @@ class Runner():
                         else:
                             optimizers[i].step()
                         optimizers[i].zero_grad()
-                        #print('-------------------------------')
-                        #cal_params_diff(self.upstreams[i], self.upstream)
+                        # print('-------------------------------')
+                        # cal_params_diff(self.upstreams[i], self.upstream)
                         # adjust learning rate
                         if schedulers[i]:
                             schedulers[i].step()

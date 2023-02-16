@@ -46,7 +46,7 @@ def _gen_frame_indices(
 ):
     i = -1
     for i in range(_count_frames(data_length, size, step)):
-        yield i * step, i * step + size
+        yield i * step, i * step + size                #返回每一个frame的起始和结束（采样点）
     if use_last_samples and i * step + size < data_length:  #如果 use_last_samples 为 True 并且最后一帧没有被包含，函数会再生成一组帧索引
         if data_length - (i + 1) * step - subsampling * label_delay > 0:
             yield (i + 1) * step, data_length
@@ -95,7 +95,7 @@ class DiarizationDataset(Dataset):
 
         # make chunk indices: filepath, start_frame, end_frame
         for rec in self.data.wavs:
-            data_len = int(self.data.reco2dur[rec] * rate / frame_shift)
+            data_len = int(self.data.reco2dur[rec] * rate / frame_shift)  #reco2dur[rec] 取出时长
             data_len = int(data_len / self.subsampling)
             if mode == "test":
                 self.chunk_indices[rec] = []
@@ -109,7 +109,7 @@ class DiarizationDataset(Dataset):
                     subsampling=self.subsampling,
                 ):
                     self.chunk_indices.append(
-                        (rec, st * self.subsampling, ed * self.subsampling)    #训的时候可能下采样，而且是把所以语料分chunk作为列表，不是test时的字典
+                        (rec, st * self.subsampling, ed * self.subsampling)    #训的时候可能下采样，而且是把所有语料分chunk作为列表（每个chunk对应mixid和起始和结束），不是test时的以rec为key的字典
                     )
             else:
                 for st, ed in _gen_chunk_indices(data_len, chunk_size):
