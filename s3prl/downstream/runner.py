@@ -383,6 +383,7 @@ class Runner():
                         grad_masks[0][params_1] += fisher_item
                         grad_masks[1][params_2] = grad_masks[0][params_1]
                         grad_masks[2][params_3] = grad_masks[0][params_1]
+                        #print(type(grad_masks[0][params_1]))
                         # for grad_mask in grad_masks:
                         #     grad_mask[params] += fisher_item              #累计梯度
                 
@@ -647,9 +648,12 @@ class Runner():
                     if pbar.n == strive_steps:    #选则最优的p
                         if self.ob_mode == 'train':  # train loss
                             min_idx = smoothed_value.index(min(smoothed_value))
-                        elif self.ob_mode == 'dev':   #dev acc or f1
+                        elif self.ob_mode == 'dev' or self.ob_mode == 'per':   #dev 
                             can_val = [self.dev_score[-3], self.dev_score[-2], self.dev_score[-1]]
-                            min_idx = can_val.index(max(can_val))
+                            if self.ob_target == 'wer':
+                                min_idx = can_val.index(min(can_val))
+                            else:    #acc or f1
+                                min_idx = can_val.index(max(can_val))
                             
                         self.upstream = self.upstreams[min_idx]
                         self.featurizer = self.featurizers[min_idx]

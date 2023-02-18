@@ -215,7 +215,7 @@ class DiarizationDataset(Dataset):
         length = np.array(len_list)
         return wav, label, length, None
 
-    def collate_fn_rec_infer(self, batch):
+    def collate_fn_rec_infer(self, batch):   #只在test的時候
         assert len(batch) == 1  # each batch should contain one recording
         chunk_num = len(batch[0][1])
         len_list = [len(batch[0][1][i]) for i in range(chunk_num)]
