@@ -324,7 +324,8 @@ class Runner():
                         tuning_pcount += params.numel()
                     grad_mask[params] = params.new_zeros(params.size())
                 else:
-                    print('frozen: ', name)      
+                    if idx == 0:
+                        print('frozen: ', name)      
                     params.requires_grad = False   
                 if 'final_proj'  not in name:
                     if idx == 0:
@@ -650,7 +651,7 @@ class Runner():
                             min_idx = smoothed_value.index(min(smoothed_value))
                         elif self.ob_mode == 'dev':   #dev 
                             can_val = [self.dev_score[-3], self.dev_score[-2], self.dev_score[-1]]
-                            if self.ob_target == 'wer' or self.ob_mode == 'per':
+                            if self.ob_target == 'wer' or self.ob_target == 'per':
                                 min_idx = can_val.index(min(can_val))
                             else:    #acc or f1
                                 min_idx = can_val.index(max(can_val))
