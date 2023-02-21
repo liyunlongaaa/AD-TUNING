@@ -274,6 +274,7 @@ class Runner():
 
 
     def _get_optimizer(self, model_params):
+        
         optimizer = get_optimizer(
             model_params, 
             self.config['runner']['total_steps'],
@@ -517,6 +518,10 @@ class Runner():
                         exec(f"del self.downstream_{i+1}")
                 optim_p = self.config['optimizer']['reserve_p'][min_idx]
                 print(f"selete p => {self.config['optimizer']['reserve_p'][min_idx]}")
+        elif self.args.tuning_mode == "random_net":
+            raise
+        else:
+            raise
         # =================== HACK END =========================  
 
         # =================== HACK BEGIN =======================  
@@ -618,8 +623,8 @@ class Runner():
                             pbar.update(1)
                             strive_bar.update(1)
                         
-                        if global_step % self.config['runner']['eval_step'] == 0:
-                            self.strive_evaluate(self.upstreams[i], self.featurizers[i], self.downstreams[i], self.all_subnets_all_entries[i], self.config['runner']['eval_dataloaders'][0], logger, global_step)
+                        if pbar.n == strive_steps:
+                            self.strive_evaluate(self.upstreams[i], self.featurizers[i], self.downstreams[i], self.all_subnets_all_entries[i], self.config['runner']['eval_dataloaders'][0], logger, global_step)  #usully, config['runner']['eval_dataloaders'][0] is dev
 
                     # logging
                     if global_step % self.config['runner']['log_step'] == 0:
@@ -651,7 +656,7 @@ class Runner():
                             min_idx = smoothed_value.index(min(smoothed_value))
                         elif self.ob_mode == 'dev':   #dev 
                             can_val = [self.dev_score[-3], self.dev_score[-2], self.dev_score[-1]]
-                            if self.ob_target == 'wer' or self.ob_target == 'per':
+                            if self.ob_target == 'wer' or self.ob_target == 'per' or self.ob_target == 'der':
                                 min_idx = can_val.index(min(can_val))
                             else:    #acc or f1
                                 min_idx = can_val.index(max(can_val))
@@ -940,7 +945,7 @@ class Runner():
             total_batch_num = len(dataloader),
         )
 
-        if self.ob_mode == 'dev':
+        if self.ob_mode == 'dev' and split == 'dev':
             self.dev_score.append(torch.FloatTensor(records[self.ob_target]).mean().item())
             print('cur dev_score : ', self.dev_score)
         batch_ids = []

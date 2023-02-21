@@ -23,7 +23,7 @@ def get_downstream_args():
     parser = argparse.ArgumentParser()
 
     #customizer
-    parser.add_argument('-tm', '--tuning_mode', choices=['subnet', 'ft'], default='ft')
+    parser.add_argument('-tm', '--tuning_mode', choices=['subnet', 'ft', 'random_net'], default='ft')
 
     # train or test for this experiment
     parser.add_argument('-m', '--mode', choices=['train', 'evaluate', 'inference'], required=True)
