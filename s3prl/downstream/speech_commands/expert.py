@@ -34,7 +34,7 @@ class DownstreamExpert(nn.Module):
         self.train_dataset = SpeechCommandsDataset(train_list, **self.datarc)
         self.dev_dataset = SpeechCommandsDataset(valid_list, **self.datarc)
         self.test_dataset = SpeechCommandsTestingDataset(**self.datarc)
-
+        
         model_cls = eval(self.modelrc['select'])
         model_conf = self.modelrc.get(self.modelrc['select'], {})
         self.projector = nn.Linear(upstream_dim, self.modelrc['projector_dim'])

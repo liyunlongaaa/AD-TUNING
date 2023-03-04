@@ -135,7 +135,7 @@ class Runner():
             self.all_entries_1 = [self.upstream_1, self.featurizer_1, self.downstream_1]
             
             #deepcopy upstream模型forward为空，不知道为什么
-
+            #加载3个网络，分别对应不同的child netword
             self.upstream_2 = self._get_upstream()
             self.featurizer_2 = self._get_featurizer(self.upstream_2)
             self.downstream_2 = self._get_downstream(self.featurizer_2)
@@ -145,11 +145,6 @@ class Runner():
             self.featurizer_3 = self._get_featurizer(self.upstream_3)
             self.downstream_3 = self._get_downstream(self.featurizer_3)
             self.all_entries_3 = [self.upstream_3, self.featurizer_3, self.downstream_3]
-
-            # self.upstream_4 = self._get_upstream()
-            # self.featurizer_4 = self._get_featurizer(self.upstream_4)
-            # self.downstream_4 = self._get_downstream(self.featurizer_4)
-            # self.all_entries_4 = [self.upstream_4, self.featurizer_4, self.downstream_4]
 
             self.upstreams = [self.upstream_1, self.upstream_2, self.upstream_3] #
             self.featurizers = [self.featurizer_1, self.featurizer_2, self.featurizer_3] # 
@@ -163,7 +158,8 @@ class Runner():
             self.downstream = self._get_downstream(self.featurizer)
             self.all_entries = [self.upstream, self.featurizer, self.downstream]
 
-        self.dev_score = []
+        self.dev_score = []   #用来记录开发集的分数，后面用来淘汰表现差的模型
+        #用来判断早停的指标
         self.ob_mode = self.config['runner'].get('observation', ['train', 'loss'])[0]
         self.ob_target = self.config['runner'].get('observation', ['train', 'loss'])[1]
 
@@ -299,6 +295,9 @@ class Runner():
             f.write(model_card)
 
     def get_fisher_mask(self):
+        """
+            cal fisher information, and get grad_masks for diff size child netword
+        """
         grad_masks = [dict() for i in range(len(self.all_subnets_all_entries))]
         #self.upstream.model.train()
         
@@ -306,8 +305,7 @@ class Runner():
 
         for entry in self.all_subnets_all_entries[0]:
             entry.model.train()
-        # for entry in self.all_entries:
-        #      entry.model.train()
+
         tuning_pcount = 0
         pcount = 0
         # specaug
@@ -317,7 +315,7 @@ class Runner():
             specaug = SpecAug(**self.config["specaug"])
 
         for idx, (named_parameters, grad_mask) in enumerate(zip((up.model.named_parameters() for up in self.upstreams), grad_masks)):
-            print(idx, named_parameters, grad_mask)
+            #print(idx, named_parameters, grad_mask)
             for name, params in named_parameters:
                 if 'encoder.layers' in name or 'layer_norm' in name:
                     if idx == 0:
@@ -331,21 +329,6 @@ class Runner():
                 if 'final_proj'  not in name:
                     if idx == 0:
                         pcount += params.numel()
-
-        # for (name_1, params_1), (name_2, params_2), (name_3, params_3) in zip(self.upstreams[0].model.named_parameters(), self.upstreams[1].model.named_parameters(), self.upstreams[2].model.named_parameters()):    #bug !!! dif model have diff param
-
-        #     if 'encoder.layers' in name_1 or 'layer_norm' in name_1:
-        #         print("encoder.layers or layer_norm : ", name_1)
-        #         grad_masks[0][params_1] = params_1.new_zeros(params_1.size())
-        #         grad_masks[1][params_2] = params_1.new_zeros(params_2.size())
-        #         grad_masks[2][params_3] = params_1.new_zeros(params_3.size())
-        #         tuning_pcount += params_1.numel()
-        #     else:
-        #         print('frozen: ', name_1)      
-        #         params_1.requires_grad = False
-
-        #     if 'final_proj'  not in name_1:
-        #         pcount += params_1.numel()
         
         tuning_pcount *= np.array(self.config['optimizer']['reserve_p'])
 
@@ -379,15 +362,12 @@ class Runner():
                 (loss / gradient_accumulate_steps).backward()
 
                 for (name_1, params_1), (name_2, params_2), (name_3, params_3) in zip(self.upstreams[0].model.named_parameters(), self.upstreams[1].model.named_parameters(), self.upstreams[2].model.named_parameters()): 
-                    if 'encoder.layers' in name_1 or 'layer_norm' in name_1: #应该laynorn也，不过影响不大
+                    if 'encoder.layers' in name_1 or 'layer_norm' in name_1: 
                         torch.nn.utils.clip_grad_norm_(params_1, self.config['runner']['gradient_clipping'])
-                        fisher_item = (params_1.grad ** 2) / N 
-                        grad_masks[0][params_1] += fisher_item
+                        fisher_item = (params_1.grad ** 2) / N               
+                        grad_masks[0][params_1] += fisher_item             #累计此轮梯度
                         grad_masks[1][params_2] = grad_masks[0][params_1]
-                        grad_masks[2][params_3] = grad_masks[0][params_1]
-                        #print(type(grad_masks[0][params_1]))
-                        # for grad_mask in grad_masks:
-                        #     grad_mask[params] += fisher_item              #累计梯度
+                        grad_masks[2][params_3] = grad_masks[0][params_1]   #fast than add
                 
                 self.upstreams[0].model.zero_grad()         
                 for entry in self.all_subnets_all_entries[0]:
@@ -409,24 +389,19 @@ class Runner():
 
         # Numpy
         r = None
-        for k, v in grad_masks[2].items():
+        for k, v in grad_masks[2].items():   #现在grad_masks 里的值都一样，都是fisher information，只有确定分界点后才变mask
             v = v.view(-1).cpu().numpy()
             if r is None:
                 r = v
             else:
                 r = np.append(r, v)
         
-        polars = [np.percentile(r, (1-reserve_p)*100) for reserve_p in self.config['optimizer']['reserve_p']]
+        polars = [np.percentile(r, (1-reserve_p)*100) for reserve_p in self.config['optimizer']['reserve_p']] #根据保留的参数确定分界点
         for i, grad_mask in enumerate(grad_masks):
             for k in grad_mask:
-                grad_mask[k] = grad_mask[k] >= polars[i]
+                grad_mask[k] = grad_mask[k] >= polars[i]   #grad_mask
         print('candidate P => {}; Polar => {}'.format(self.config['optimizer']['reserve_p'], polars))
-        # sum = [0, 0, 0]
-        # for i, grad_mask in enumerate(grad_masks):   
-        #     for k in grad_mask:
-        #         sum[i] += (grad_mask[k] == True).sum()
-        # print(sum)
-        # exit()             #折没问题
+
         # TODO: pytorch: torch.kthvalue
         
         return grad_masks
@@ -468,7 +443,6 @@ class Runner():
 
         # progress bar
         tqdm_file = sys.stderr if is_leader_process() else open(os.devnull, 'w')
-        #selete_pbars = [tqdm(total=self.config['runner']['total_steps'] * 0.1, dynamic_ncols=True, desc='overall', file=tqdm_file) for i in range(3)]
         pbar = tqdm(total=self.config['runner']['total_steps'], dynamic_ncols=True, desc='overall', file=tqdm_file)
         init_step = self.init_ckpt.get('Step')
         if init_step:
@@ -484,10 +458,10 @@ class Runner():
         records = [defaultdict(list) for i in range(len(self.all_subnets_all_entries))]
         selete_p = self.init_ckpt.get('Optim_p', -1)
         min_idx = 0
-        strive_ratio = self.config['runner'].get('strive_ratio', 0.1)
+        strive_ratio = self.config['runner'].get('strive_ratio', 0.1)      #早期训练的比例
         strive_steps = self.config['runner']['total_steps'] * strive_ratio
-        observation = 'loss'
-        print(f"-------------------------strive_ratio : {strive_steps}  observation : {observation}----------------------")
+        observation = 'loss'                    #之前用来计算loss的变化，现在实际用不到
+        print(f"-------------------------strive_steps : {strive_steps} ----------------------")
 
         batch_ids = []
         backward_steps = 0
@@ -497,11 +471,11 @@ class Runner():
             print(f'[Runner] - Here is Subnet Tuning')
             grad_masks = self.get_fisher_mask()
             for i in range(len(optimizers)):
-                optimizers[i].set_grad_mask(grad_masks[i])
+                optimizers[i].set_grad_mask(grad_masks[i])   #每个优化器负责更新不同的child network
 
             if self.upstreams[0].trainable:
                 print("upstream is tuning")
-            if selete_p != -1:  #resume
+            if selete_p != -1:  # for resume training
                 min_idx = self.config['optimizer']['reserve_p'].index(selete_p)
                 self.upstream = self.upstreams[min_idx]
                 self.featurizer = self.featurizers[min_idx]
@@ -518,15 +492,12 @@ class Runner():
                         exec(f"del self.downstream_{i+1}")
                 optim_p = self.config['optimizer']['reserve_p'][min_idx]
                 print(f"selete p => {self.config['optimizer']['reserve_p'][min_idx]}")
-        elif self.args.tuning_mode == "random_net":
-            raise
         else:
             raise
         # =================== HACK END =========================  
 
         # =================== HACK BEGIN =======================  
-        # model-seletion dependon on training loss
-        # =================== HACK END =========================  
+        # model-seletion dependon on training loss or dev mertics
 
 
         # 定义滑动平均系数
@@ -536,12 +507,12 @@ class Runner():
         num_acc = 0
         
         global_step = 0
-        strive_bar = tqdm(total=strive_steps, dynamic_ncols=True, desc=f'strive', file=tqdm_file)
+        strive_bar = tqdm(total=strive_steps, dynamic_ncols=True, desc=f'strive', file=tqdm_file)   #用来观察淘汰阶段的训练
         #可视化
         log_losses = [[] for i in range(len(self.all_subnets_all_entries))]
         while pbar.n < pbar.total:
             try:
-                dataloader = self.downstreams[0].model.get_dataloader(train_split, epoch=epoch)
+                dataloader = self.downstreams[0].model.get_dataloader(train_split, epoch=epoch)   #取数据，哪个模型取无关紧要，取出的数据共用的
             except TypeError as e:
                 if "unexpected keyword argument 'epoch'" in str(e):
                     dataloader = self.downstreams[0].model.get_dataloader(train_split)
@@ -555,9 +526,9 @@ class Runner():
                 
                 wavs = [torch.FloatTensor(wav).to(self.args.device) for wav in wavs]
                 batch_ids.append(batch_id)
-                if pbar.n < strive_steps:
+                if pbar.n < strive_steps:    #淘汰阶段
                     global_step = pbar.n + 1
-                    for i in range(len(self.all_subnets_all_entries)):
+                    for i in range(len(self.all_subnets_all_entries)):  #分别训每个网络
                         try:
                             if self.upstreams[i].trainable:
                                 features = self.upstreams[i].model(wavs)
@@ -623,13 +594,13 @@ class Runner():
                             pbar.update(1)
                             strive_bar.update(1)
                         
-                        if pbar.n == strive_steps:
-                            self.strive_evaluate(self.upstreams[i], self.featurizers[i], self.downstreams[i], self.all_subnets_all_entries[i], self.config['runner']['eval_dataloaders'][0], logger, global_step)  #usully, config['runner']['eval_dataloaders'][0] is dev
+                        if pbar.n == strive_steps:  #淘汰阶段结束时，记录各模型当前在开发集上的表现
+                            self.strive_evaluate(self.upstreams[i], self.featurizers[i], self.downstreams[i], self.all_subnets_all_entries[i], self.config['runner']['eval_dataloaders'][0], logger, global_step)  #usully, config['runner']['eval_dataloaders'][0] is dev or dev-clean(asr)，so we use [0] to index instead of 'dev。千万别把test放在config的第一位。其实就不应该把test放在eval_dataloaders里的，但是尊重s3prl源代码，我也没改，测试机不参与训练就不影响结论。
 
                     # logging
                     if global_step % self.config['runner']['log_step'] == 0:
 
-                        # 对数据进行平滑
+                        # 对loss进行平滑，记录loss变化
                         num_acc += 1
                         debias_weight = 1.0 if alpha == 1.0 else 1.0 - alpha ** num_acc
                         for i in range(len(self.all_subnets_all_entries)):
@@ -652,15 +623,16 @@ class Runner():
 
 
                     if pbar.n == strive_steps:    #选则最优的p
-                        if self.ob_mode == 'train':  # train loss
+                        if self.ob_mode == 'train':  # 根据train loss来选，实际没这么干了
                             min_idx = smoothed_value.index(min(smoothed_value))
-                        elif self.ob_mode == 'dev':   #dev 
-                            can_val = [self.dev_score[-3], self.dev_score[-2], self.dev_score[-1]]
+                        elif self.ob_mode == 'dev':   #根据开发集上的指标来选 
+                            can_val = [self.dev_score[-3], self.dev_score[-2], self.dev_score[-1]]   #分别对应3个模型的评分
                             if self.ob_target == 'wer' or self.ob_target == 'per' or self.ob_target == 'der':
-                                min_idx = can_val.index(min(can_val))
+                                min_idx = can_val.index(min(can_val))   #选最小的
                             else:    #acc or f1
-                                min_idx = can_val.index(max(can_val))
-                            
+                                min_idx = can_val.index(max(can_val))    #选最大的
+                        # 手动指定
+                        #min_idx = 0    
                         self.upstream = self.upstreams[min_idx]
                         self.featurizer = self.featurizers[min_idx]
                         self.downstream = self.downstreams[min_idx]
@@ -890,7 +862,9 @@ class Runner():
 
     def strive_evaluate(self, upstream, featurizer, downstream, all_entries, split=None, logger=None, global_step=0):
         """evaluate function will always be called on a single process even during distributed training"""
-        
+        print('--------------------------------------------------', split)
+        if 'dev' not in split:
+            raise 
         # When this member function is called directly by command line
         not_during_training = split is None and logger is None and global_step == 0
         if not_during_training:
@@ -944,8 +918,8 @@ class Runner():
             batch_ids = batch_ids,
             total_batch_num = len(dataloader),
         )
-
-        if self.ob_mode == 'dev' and split == 'dev':
+        print(split)
+        if self.ob_mode == 'dev' and split in 'dev':
             self.dev_score.append(torch.FloatTensor(records[self.ob_target]).mean().item())
             print('cur dev_score : ', self.dev_score)
         batch_ids = []

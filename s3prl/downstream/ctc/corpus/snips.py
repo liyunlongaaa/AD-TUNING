@@ -9,6 +9,7 @@ class SnipsDataset(Dataset):
     def __init__(self, split, tokenizer, bucket_size, path, num_workers=12, ascending=False, **kwargs):
         # Setup
         self.path = path
+
         self.bucket_size = bucket_size
         self.speaker_list = kwargs[f'{split}_speakers'] if type(split) == str else kwargs[f'{split[0]}_speakers']
 
