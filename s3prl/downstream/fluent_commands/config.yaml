@@ -7,14 +7,15 @@ runner:
   eval_step: 5000
   save_step: 250
   max_keep: 1
+  observation: [dev, acc]
   eval_dataloaders:
     - dev
     - test
 
 optimizer:
-  name: TorchOptim
-  torch_optim_name: Adam
-  lr: 1.0e-4
+  name: SubnetAdamW
+  reserve_p: [1.0e-1, 1.0e-2, 1.0e-3]
+  lr: 5.0e-4
 
 # comment the whole scheduler config block
 # to disable learning rate scheduling
@@ -24,10 +25,10 @@ optimizer:
 
 downstream_expert:
   datarc:
-    file_path: /groups/public/benchmark/fluent_speech_commands_dataset
+    file_path: /home/yoos/Documents/data/fluent_speech_commands_dataset
     num_workers: 12
-    train_batch_size: 32
-    eval_batch_size: 32
+    train_batch_size: 16
+    eval_batch_size: 16
 
   modelrc:
     projector_dim: 256

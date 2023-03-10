@@ -1,5 +1,5 @@
 runner:
-  total_steps: 200000
+  total_steps: 30000
   gradient_clipping: 1
   gradient_accumulate_steps: 1
 
@@ -7,14 +7,16 @@ runner:
   eval_step: 5000
   save_step: 1000
   max_keep: 1
+  observation: [dev, acc]
   eval_dataloaders:
     - dev
     - test
 
+  
 optimizer:
-  name: TorchOptim
-  torch_optim_name: Adam
-  lr: 1.0e-4
+  name: SubnetAdamW
+  reserve_p: [0.1, 0.01, 0.001]
+  lr: 9.0e-4
 
 # comment the whole scheduler config block
 # to disable learning rate scheduling
@@ -24,8 +26,8 @@ optimizer:
 
 downstream_expert:
   datarc:
-    speech_commands_root: /groups/public/benchmark/speech_commands/train
-    speech_commands_test_root: /groups/public/benchmark/speech_commands/test
+    speech_commands_root: /home/yoos/Documents/data/speech_commands_v0.01
+    speech_commands_test_root: /home/yoos/Documents/data/speech_commands_test_set_v0.01
     num_workers: 8
     batch_size: 32
 

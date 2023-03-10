@@ -9,23 +9,25 @@ runner:
   eval_step: 5000
   save_step: 1000
   max_keep: 1
+  observation: [dev, acc]
   eval_dataloaders: 
     - dev
     - test
   
-optimizer:
-  name: TorchOptim
-  torch_optim_name: Adam
-  lr: 1.0e-4
 
+optimizer:
+  name: SubnetAdamW
+  reserve_p: [1.0e-1,1.0e-2,1.0e-3]
+  lr: 1.0e-3
+  
 # # comment the whole scheduler config block to disable learning rate scheduling
-# scheduler:
-#   name: linear_schedule_with_warmup
-#   num_warmup_steps: 5000
+scheduler:
+  name: linear_schedule_with_warmup
+  num_warmup_steps: 5000
 
 downstream_expert: 
   datarc:
-    file_path: /path/to/VoxCeleb1
+    file_path: /home/yoos/Documents/data/VoxCeleb1_supb
     meta_data: ./downstream/voxceleb1/veri_test_class.txt
     num_workers: 12
     train_batch_size: 8

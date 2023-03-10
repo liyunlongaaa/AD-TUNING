@@ -413,7 +413,6 @@ class Runner():
         trainable_models_list = []
         trainable_paras_list = []
         for all_entries in self.all_subnets_all_entries:
-        #for all_entries in [self.all_entries]:
             trainable_models = []
             trainable_paras = []
             for entry in all_entries:
@@ -497,7 +496,7 @@ class Runner():
         # =================== HACK END =========================  
 
         # =================== HACK BEGIN =======================  
-        # model-seletion dependon on training loss or dev mertics
+        # model-seletion dependon on training loss or dev mertics (default)
 
 
         # 定义滑动平均系数
@@ -580,9 +579,7 @@ class Runner():
                         else:
                             optimizers[i].step()
                         optimizers[i].zero_grad()
-                        # print('-------------------------------')
-                        # cal_params_diff(self.upstreams[i], self.upstream)
-                        # adjust learning rate
+
                         if schedulers[i]:
                             schedulers[i].step()
 
@@ -648,9 +645,9 @@ class Runner():
                                 exec(f"del self.featurizer_{i+1}")
                                 exec(f"del self.downstream_{i+1}")
                                 loss_path = os.path.join(self.args.expdir, 'loss_' + str(self.config['optimizer']['reserve_p'][i]))
-                                np.save(f'{loss_path}.npy', np.array(log_losses[i]))
+                                np.save(f'{loss_path}.npy', np.array(log_losses[i]))     #save loss, no sense here
                         optim_p = self.config['optimizer']['reserve_p'][min_idx]
-                        print(f"selete p => {self.config['optimizer']['reserve_p'][min_idx]}")
+                        print(f"selete p => {self.config['optimizer']['reserve_p'][min_idx]}")    #choose
 
                             
                 else:
@@ -829,7 +826,7 @@ class Runner():
                     split,
                     features, *others,
                     records = records,
-                    batch_id = batch_id,
+                    batch_id = batch_id, 
                 )
                 batch_ids.append(batch_id)
 
@@ -918,7 +915,6 @@ class Runner():
             batch_ids = batch_ids,
             total_batch_num = len(dataloader),
         )
-        print(split)
         if self.ob_mode == 'dev' and split in 'dev':
             self.dev_score.append(torch.FloatTensor(records[self.ob_target]).mean().item())
             print('cur dev_score : ', self.dev_score)
