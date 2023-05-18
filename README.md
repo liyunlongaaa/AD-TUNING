@@ -4,14 +4,9 @@
 we propose AD-TUNING, an adaptive CHILD-TUNING approach for hyperparameter tuning of child networks. To address the issue of selecting an optimal hyperparameter set P , 
 which often varies for different tasks in CHILD-TUNING, we first analyze 
 the distribution of parameter importance to ascertain the range of P . Next, we propose a simple yet
-efficient early-stop algorithm to select the appropriate child net-
-work from different sizes for various speech tasks. When eval-
-uated on seven speech processing tasks in the SUPERB bench-
-mark, our proposed framework only requires fine-tuning less
-than 0.1%∼10% of pre-trained model parameters for each task
-to achieve state-of-the-art results in most of the tasks. For in-
-stance, the DER of the speaker diarization task is 9.22% rel-
-atively lower than the previously reported best results. Other
+efficient early-stop algorithm to select the appropriate child network from different sizes for various speech tasks. When evaluated on seven speech processing tasks in the SUPERB benchmark, our proposed framework only requires fine-tuning less
+than 0.1%∼10% of pretrained model parameters for each task
+to achieve state-of-the-art results in most of the tasks. For instance, the DER of the speaker diarization task is 9.22% relatively lower than the previously reported best results. Other
 benchmark results are also very competitive. 
 
 ### Pipeline
