@@ -28,4 +28,4 @@ cd s3prl
 bash run.sh > log.txt
 ```
 
-More information on training and inference can be refered to [s3prl](https://github.com/s3prl/s3prl/blob/main/s3prl/downstream/docs/superb.md)
+More information (data, config, training and inference) can be refered to [here](https://github.com/s3prl/s3prl/blob/main/s3prl/downstream/docs/superb.md)
