@@ -18,6 +18,7 @@ benchmark results are also very competitive.
 git clone https://github.com/liyunlongaaa/AD-TUNING.git
 cd AD-TUNING
 conda create -n  ad_tuning python=3.10
+conda activate ad_tuning
 pip install -e ".[all]"
 pip install torch==1.13.1+cu116 torchvision==0.14.1+cu116 torchaudio==0.13.1 --extra-index-url https://download.pytorch.org/whl/cu116
 ```
