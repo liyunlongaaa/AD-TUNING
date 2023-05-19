@@ -12,9 +12,9 @@ runner:
     - dev
 
 optimizer:
-  name: SubnetAdamW
+  name: ChildnetAdamW
   reserve_p: [0.1, 0.01, 0.001]
-  lr: 5.0e-5
+  lr: 5.0e-4
 
 downstream_expert:
   datarc:
@@ -27,7 +27,7 @@ downstream_expert:
 
   loaderrc:
     num_workers: 8
-    train_batchsize: 8
+    train_batchsize: 4
     eval_batchsize: 1
     train_dir: ./downstream/diarization/data/train
     dev_dir: ./downstream/diarization/data/dev

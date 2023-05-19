@@ -35,8 +35,6 @@ class DownstreamExpert(nn.Module):
         modelrc = downstream_expert["model"]
         self.projector = nn.Linear(upstream_dim, modelrc["project_dim"])
         model_select = downstream_expert["model"]["select"]
-        print(self.tokenizer._vocab_list)
-        exit()
         self.model = eval(model_select)(
             modelrc["project_dim"],
             self.tokenizer.vocab_size,

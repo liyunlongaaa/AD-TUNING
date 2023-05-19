@@ -10,25 +10,24 @@ runner:
   observation: [dev, acc]
   eval_dataloaders:
     - dev
-    - test
 
 optimizer:
-  name: SubnetAdamW
+  name: ChildnetAdamW
   reserve_p: [1.0e-1, 1.0e-2, 1.0e-3]
   lr: 5.0e-4
 
 # comment the whole scheduler config block
 # to disable learning rate scheduling
-# scheduler:
-#   name: linear_schedule_with_warmup
-#   num_warmup_steps: 1000
+scheduler:
+  name: linear_schedule_with_warmup
+  num_warmup_steps: 1000
 
 downstream_expert:
   datarc:
     file_path: /home/yoos/Documents/data/fluent_speech_commands_dataset
     num_workers: 12
-    train_batch_size: 16
-    eval_batch_size: 16
+    train_batch_size: 12
+    eval_batch_size: 12
 
   modelrc:
     projector_dim: 256

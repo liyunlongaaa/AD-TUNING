@@ -86,12 +86,12 @@ def get_AdamW(model_params, lr=2e-4, **kwargs):
     optimizer = AdamW(params, lr=lr)
     return optimizer
 
-def get_SubnetAdamW(model_params, lr=2e-4, **kwargs):
+def get_ChildnetAdamW(model_params, lr=2e-4, **kwargs):
     params = []
     for m in model_params:
         params += list(m.parameters())
     kwargs.pop('total_steps')
-    optimizer = SubnetAdamW(params, lr=lr, **kwargs)
+    optimizer = ChildnetAdamW(params, lr=lr, **kwargs)
     return optimizer
 
 def get_TorchOptim(model_params, torch_optim_name, **kwargs):
@@ -103,7 +103,7 @@ def get_TorchOptim(model_params, torch_optim_name, **kwargs):
     optim = Opt_class(params, **kwargs)
     return optim
 
-class SubnetAdamW(Optimizer):
+class ChildnetAdamW(Optimizer):
     """
     Implements Adam algorithm with weight decay fix as introduced in
     `Decoupled Weight Decay Regularization <https://arxiv.org/abs/1711.05101>`__.
@@ -131,7 +131,7 @@ class SubnetAdamW(Optimizer):
         weight_decay: float = 0.0,
         correct_bias: bool = True,
         reserve_p = 1.0,
-        tuning_mode = 'subnet'
+        tuning_mode = 'ad_tuning'
     ):
         if lr < 0.0:
             raise ValueError("Invalid learning rate: {} - should be >= 0.0".format(lr))
@@ -172,12 +172,12 @@ class SubnetAdamW(Optimizer):
 
                 # =================== HACK BEGIN =======================         
                 if self.tuning_mode is not None:
-                    if self.tuning_mode == 'subnet':
+                    if self.tuning_mode == 'ad_tuning':
                         if p in self.grad_mask:
                             grad *= self.grad_mask[p]
                     else:
                         # grad_mask = Bernoulli(grad.new_full(size=grad.size(), fill_value=self.reserve_p))
-                        # grad *= grad_mask.sample() / self.reserve_p
+                        # grad *= grad_mask.sample() 
                         raise("not implement !!!")
                 else: 
                     raise("not implement !!!")

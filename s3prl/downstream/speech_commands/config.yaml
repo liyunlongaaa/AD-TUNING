@@ -1,5 +1,5 @@
 runner:
-  total_steps: 30000
+  total_steps: 50000
   gradient_clipping: 1
   gradient_accumulate_steps: 1
 
@@ -10,13 +10,11 @@ runner:
   observation: [dev, acc]
   eval_dataloaders:
     - dev
-    - test
-
   
 optimizer:
-  name: SubnetAdamW
+  name: ChildnetAdamW
   reserve_p: [0.1, 0.01, 0.001]
-  lr: 9.0e-4
+  lr: 3.0e-4
 
 # comment the whole scheduler config block
 # to disable learning rate scheduling

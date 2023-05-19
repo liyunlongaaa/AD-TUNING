@@ -295,7 +295,7 @@ class DownstreamExpert(nn.Module):
         records["acc"] += [ACC]
         records["der"] += [DER]
 
-        if mode == "test" and self.save_predictions:   #这段代码将处理后的模型预测结果以概率形式保存到hdf5文件中。
+        if mode == "test" and self.save_predictions:   #这段代码将处理后的模型预测结果以概率形式保存到hdf5文件中。 
             predict = predicted.data.cpu().numpy()
             predict = np.vstack(list(predict))
             predict = 1 / (1 + np.exp(-predict))

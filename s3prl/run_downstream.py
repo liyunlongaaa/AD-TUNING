@@ -9,21 +9,22 @@ import torchaudio
 import numpy as np
 from argparse import Namespace
 from torch.distributed import is_initialized, get_world_size
-
+import pdb
 import sys
-sys.path.append("/home/yoos/Documents/code/exp2")
+sys.path.insert(0, "/home/yoos/Documents/code/AD_TUNING")
 
+#pdb.set_trace()
 from s3prl import hub
 from s3prl.downstream.runner import Runner
 from s3prl.utility.helper import backup, get_time_tag, hack_isinstance, is_leader_process, override
-
+#exit()
 from huggingface_hub import HfApi, HfFolder
 
 def get_downstream_args():
     parser = argparse.ArgumentParser()
 
     #customizer
-    parser.add_argument('-tm', '--tuning_mode', choices=['subnet', 'ft'], default='subnet')
+    parser.add_argument('-tm', '--tuning_mode', choices=['ad_tuning', 'ft'], default='ad_tuning')
 
     # train or test for this experiment
     parser.add_argument('-m', '--mode', choices=['train', 'evaluate', 'inference'], required=True)

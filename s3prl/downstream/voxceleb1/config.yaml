@@ -12,11 +12,10 @@ runner:
   observation: [dev, acc]
   eval_dataloaders: 
     - dev
-    - test
   
 
 optimizer:
-  name: SubnetAdamW
+  name: ChildnetAdamW
   reserve_p: [1.0e-1,1.0e-2,1.0e-3]
   lr: 1.0e-3
   

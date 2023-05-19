@@ -49,7 +49,7 @@ for med in 1 11; do
             --frame_shift=${frame_shift} --subsampling=1 --sampling_rate=${sr} \
             $scoring_log_dir/file_list $scoring_dir/hyp_${th}_$med.rttm
         python ${dscore_dir}/score.py -r ${test_set}/rttm -s $scoring_dir/hyp_${th}_$med.rttm \
-            > $scoring_dir/result_th${th}_med${med} 2>/dev/null || exit
+            > $scoring_dir/result_th${th}_med${med} || exit   #2>/dev/null 
 
         # NIST scoring
         # md-eval.pl \

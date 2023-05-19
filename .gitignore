@@ -140,11 +140,11 @@ data
 # checkpoints
 *.ckpt
 *.pth
+s3prl/result/downstream/*
 
 # experiment files
 *.png
 *.pkl
-*.yaml
 *.sh
 *.pt
 *.tar

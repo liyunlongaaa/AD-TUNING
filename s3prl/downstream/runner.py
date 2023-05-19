@@ -1,4 +1,5 @@
 import copy, itertools
+from datetime import datetime
 import os
 import sys
 import math
@@ -123,19 +124,20 @@ class Runner():
         self.args = args
         self.config = config
         self.init_ckpt = torch.load(self.args.init_ckpt, map_location='cpu') if self.args.init_ckpt else {}
-        
+        # get timestamp in current timezone, eg. 2020-08-01_15-23-45, and print it
+        self.timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        print(f"timestamp: {self.timestamp}")
+
         if args.mode == 'train':
             self.upstream, self.featurizer, self.downstream,  self.all_entries = None, None, None, None
-            self.upstream = self._get_upstream()
+            #self.upstream = self._get_upstream()
 
+            #Define 3 candidate networks, you can easily increase or decrease the number of candidate networks according to your own computing resources. In theory, the more candidate networks defined, the better the results may be.
             self.upstream_1 = self._get_upstream()
-
             self.featurizer_1 = self._get_featurizer(self.upstream_1)
             self.downstream_1 = self._get_downstream(self.featurizer_1)
             self.all_entries_1 = [self.upstream_1, self.featurizer_1, self.downstream_1]
             
-            #deepcopy upstream模型forward为空，不知道为什么
-            #加载3个网络，分别对应不同的child netword
             self.upstream_2 = self._get_upstream()
             self.featurizer_2 = self._get_featurizer(self.upstream_2)
             self.downstream_2 = self._get_downstream(self.featurizer_2)
@@ -150,7 +152,7 @@ class Runner():
             self.featurizers = [self.featurizer_1, self.featurizer_2, self.featurizer_3] # 
             self.downstreams = [self.downstream_1, self.downstream_2, self.downstream_3] # 
 
-            self.all_subnets_all_entries = [self.all_entries_1, self.all_entries_2, self.all_entries_3] #
+            self.all_childnets_all_entries = [self.all_entries_1, self.all_entries_2, self.all_entries_3] #
 
         else:
             self.upstream = self._get_upstream()
@@ -158,8 +160,8 @@ class Runner():
             self.downstream = self._get_downstream(self.featurizer)
             self.all_entries = [self.upstream, self.featurizer, self.downstream]
 
-        self.dev_score = []   #用来记录开发集的分数，后面用来淘汰表现差的模型
-        #用来判断早停的指标
+        self.dev_score = []   #ecord the score of the development set, and then use it to eliminate the poor performing model
+        #used to determine early stop 
         self.ob_mode = self.config['runner'].get('observation', ['train', 'loss'])[0]
         self.ob_target = self.config['runner'].get('observation', ['train', 'loss'])[1]
 
@@ -251,6 +253,7 @@ class Runner():
 
 
     def _get_downstream(self, featurizer):
+        
         expert = importlib.import_module(f"s3prl.downstream.{self.args.downstream}.expert")
         Downstream = getattr(expert, "DownstreamExpert")
 
@@ -298,12 +301,12 @@ class Runner():
         """
             cal fisher information, and get grad_masks for diff size child netword
         """
-        grad_masks = [dict() for i in range(len(self.all_subnets_all_entries))]
+        grad_masks = [dict() for i in range(len(self.all_childnets_all_entries))]
         #self.upstream.model.train()
         
         records = defaultdict(list)
 
-        for entry in self.all_subnets_all_entries[0]:
+        for entry in self.all_childnets_all_entries[0]:
             entry.model.train()
 
         tuning_pcount = 0
@@ -341,7 +344,7 @@ class Runner():
         
         N = len(train_dataloader)
 
-        tqdm_file = sys.stderr if is_leader_process() else open(os.devnull, 'w')   #如果 is_leader_process() 返回 True，则进度条将显示在命令行中，否则，进度条将被忽略。
+        tqdm_file = sys.stderr if is_leader_process() else open(os.devnull, 'w')   
         for batch_id, (wavs, *others) in enumerate(tqdm(train_dataloader, dynamic_ncols=True, desc='get_fisher', file=tqdm_file)):
             try:
                 wavs = [torch.FloatTensor(wav).to(self.args.device) for wav in wavs]
@@ -365,12 +368,12 @@ class Runner():
                     if 'encoder.layers' in name_1 or 'layer_norm' in name_1: 
                         torch.nn.utils.clip_grad_norm_(params_1, self.config['runner']['gradient_clipping'])
                         fisher_item = (params_1.grad ** 2) / N               
-                        grad_masks[0][params_1] += fisher_item             #累计此轮梯度
+                        grad_masks[0][params_1] += fisher_item              #accumulate gradient
                         grad_masks[1][params_2] = grad_masks[0][params_1]
                         grad_masks[2][params_3] = grad_masks[0][params_1]   #fast than add
                 
                 self.upstreams[0].model.zero_grad()         
-                for entry in self.all_subnets_all_entries[0]:
+                for entry in self.all_childnets_all_entries[0]:
                     entry.model.zero_grad()
                 del loss
             except RuntimeError as e:
@@ -380,7 +383,7 @@ class Runner():
                             raise
                         with torch.cuda.device(self.args.device):
                             torch.cuda.empty_cache()
-                        for entry in self.all_subnets_all_entries[0]:
+                        for entry in self.all_childnets_all_entries[0]:
                             entry.model.zero_grad()
                         continue
                     else:
@@ -389,14 +392,14 @@ class Runner():
 
         # Numpy
         r = None
-        for k, v in grad_masks[2].items():   #现在grad_masks 里的值都一样，都是fisher information，只有确定分界点后才变mask
+        for k, v in grad_masks[2].items():   #now the value in grad_masks are all same fisher information, only after determining the boundary point will it change to mask
             v = v.view(-1).cpu().numpy()
             if r is None:
                 r = v
             else:
                 r = np.append(r, v)
         
-        polars = [np.percentile(r, (1-reserve_p)*100) for reserve_p in self.config['optimizer']['reserve_p']] #根据保留的参数确定分界点
+        polars = [np.percentile(r, (1-reserve_p)*100) for reserve_p in self.config['optimizer']['reserve_p']] #determine the boundary point according to the reserved P
         for i, grad_mask in enumerate(grad_masks):
             for k in grad_mask:
                 grad_mask[k] = grad_mask[k] >= polars[i]   #grad_mask
@@ -408,11 +411,11 @@ class Runner():
 
     def train(self):
 
-        assert len(self.config['optimizer']['reserve_p']) == len(self.all_subnets_all_entries) , "Please check the num of candidate P and network is equal"
+        assert len(self.config['optimizer']['reserve_p']) == len(self.all_childnets_all_entries) , "Please check the num of candidate P and network is equal"
         # trainable parameters and train/eval mode
         trainable_models_list = []
         trainable_paras_list = []
-        for all_entries in self.all_subnets_all_entries:
+        for all_entries in self.all_childnets_all_entries:
             trainable_models = []
             trainable_paras = []
             for entry in all_entries:
@@ -429,7 +432,7 @@ class Runner():
 
         # scheduler
         #scheduler = None
-        schedulers = [None for i in range(len(self.all_subnets_all_entries))]
+        schedulers = [None for i in range(len(self.all_childnets_all_entries))]
         if self.config.get('scheduler'):
             #scheduler = self._get_scheduler(optimizer)
             schedulers = [self._get_scheduler(optimizer) for optimizer in optimizers]
@@ -454,23 +457,23 @@ class Runner():
         epoch = self.init_ckpt.get('Epoch', 0)
         optim_p = None
         train_split = self.config['runner'].get("train_dataloader", "train")
-        records = [defaultdict(list) for i in range(len(self.all_subnets_all_entries))]
+        records = [defaultdict(list) for i in range(len(self.all_childnets_all_entries))]
         selete_p = self.init_ckpt.get('Optim_p', -1)
         min_idx = 0
-        strive_ratio = self.config['runner'].get('strive_ratio', 0.1)      #早期训练的比例
+        strive_ratio = self.config['runner'].get('strive_ratio', 0.1)      #early stop ratio
         strive_steps = self.config['runner']['total_steps'] * strive_ratio
-        observation = 'loss'                    #之前用来计算loss的变化，现在实际用不到
+        observation = 'loss'                    
         print(f"-------------------------strive_steps : {strive_steps} ----------------------")
 
         batch_ids = []
         backward_steps = 0
         # =================== HACK BEGIN =======================   
         #get_fisher_mask & set mask
-        if self.args.tuning_mode == "subnet":
-            print(f'[Runner] - Here is Subnet Tuning')
+        if self.args.tuning_mode == "ad_tuning":
+            print(f'[Runner] - Here is childnet Tuning')
             grad_masks = self.get_fisher_mask()
             for i in range(len(optimizers)):
-                optimizers[i].set_grad_mask(grad_masks[i])   #每个优化器负责更新不同的child network
+                optimizers[i].set_grad_mask(grad_masks[i])   #each optimizer is responsible for updating different child network
 
             if self.upstreams[0].trainable:
                 print("upstream is tuning")
@@ -479,12 +482,12 @@ class Runner():
                 self.upstream = self.upstreams[min_idx]
                 self.featurizer = self.featurizers[min_idx]
                 self.downstream = self.downstreams[min_idx]
-                self.all_entries = self.all_subnets_all_entries[min_idx]
+                self.all_entries = self.all_childnets_all_entries[min_idx]
                 trainable_paras = trainable_paras_list[min_idx]
                 optimizer = optimizers[min_idx]
                 scheduler = schedulers[min_idx]
                 records = records[min_idx]
-                for i in range(len(self.all_subnets_all_entries)):
+                for i in range(len(self.all_childnets_all_entries)):
                     if i != min_idx:
                         exec(f"del self.upstream_{i+1}")
                         exec(f"del self.featurizer_{i+1}")
@@ -499,19 +502,19 @@ class Runner():
         # model-seletion dependon on training loss or dev mertics (default)
 
 
-        # 定义滑动平均系数
+        # define the smoothing loss
         alpha = 0.6
-        last = [0 for i in range(len(self.all_subnets_all_entries))]
-        smoothed_value = [0 for i in range(len(self.all_subnets_all_entries))]
+        last = [0 for i in range(len(self.all_childnets_all_entries))]
+        smoothed_value = [0 for i in range(len(self.all_childnets_all_entries))]
         num_acc = 0
         
         global_step = 0
-        strive_bar = tqdm(total=strive_steps, dynamic_ncols=True, desc=f'strive', file=tqdm_file)   #用来观察淘汰阶段的训练
+        strive_bar = tqdm(total=strive_steps, dynamic_ncols=True, desc=f'strive', file=tqdm_file)   #use to observe the training of elimination stage
         #可视化
-        log_losses = [[] for i in range(len(self.all_subnets_all_entries))]
+        log_losses = [[] for i in range(len(self.all_childnets_all_entries))]
         while pbar.n < pbar.total:
             try:
-                dataloader = self.downstreams[0].model.get_dataloader(train_split, epoch=epoch)   #取数据，哪个模型取无关紧要，取出的数据共用的
+                dataloader = self.downstreams[0].model.get_dataloader(train_split, epoch=epoch)  
             except TypeError as e:
                 if "unexpected keyword argument 'epoch'" in str(e):
                     dataloader = self.downstreams[0].model.get_dataloader(train_split)
@@ -525,9 +528,9 @@ class Runner():
                 
                 wavs = [torch.FloatTensor(wav).to(self.args.device) for wav in wavs]
                 batch_ids.append(batch_id)
-                if pbar.n < strive_steps:    #淘汰阶段
+                if pbar.n < strive_steps:    #eliminate stage
                     global_step = pbar.n + 1
-                    for i in range(len(self.all_subnets_all_entries)):  #分别训每个网络
+                    for i in range(len(self.all_childnets_all_entries)):  #train each child network
                         try:
                             if self.upstreams[i].trainable:
                                 features = self.upstreams[i].model(wavs)
@@ -564,7 +567,7 @@ class Runner():
                                 raise
 
                         # whether to accumulate gradient
-                        if i == 0:   #只累计一次
+                        if i == 0:   
                             backward_steps += 1
                         if backward_steps % gradient_accumulate_steps > 0:
                             continue
@@ -585,22 +588,22 @@ class Runner():
 
                         if not is_leader_process():
                             batch_ids = []
-                            records = [defaultdict(list) for j in range(len(self.all_subnets_all_entries))]
+                            records = [defaultdict(list) for j in range(len(self.all_childnets_all_entries))]
                             continue
                         if i == 0:
                             pbar.update(1)
                             strive_bar.update(1)
                         
-                        if pbar.n == strive_steps:  #淘汰阶段结束时，记录各模型当前在开发集上的表现
-                            self.strive_evaluate(self.upstreams[i], self.featurizers[i], self.downstreams[i], self.all_subnets_all_entries[i], self.config['runner']['eval_dataloaders'][0], logger, global_step)  #usully, config['runner']['eval_dataloaders'][0] is dev or dev-clean(asr)，so we use [0] to index instead of 'dev。千万别把test放在config的第一位。其实就不应该把test放在eval_dataloaders里的，但是尊重s3prl源代码，我也没改，测试机不参与训练就不影响结论。
+                        if pbar.n == strive_steps:  #when elimination stage end, record the performance of each model on the development set
+                            self.strive_evaluate(self.upstreams[i], self.featurizers[i], self.downstreams[i], self.all_childnets_all_entries[i], self.config['runner']['eval_dataloaders'][0], logger, global_step)  #usully, config['runner']['eval_dataloaders'][0] is dev or dev-clean(asr) in s3prl，so we use [0] to index instead of 'dev。
 
                     # logging
                     if global_step % self.config['runner']['log_step'] == 0:
 
-                        # 对loss进行平滑，记录loss变化
+                        #moothing loss, record loss change
                         num_acc += 1
                         debias_weight = 1.0 if alpha == 1.0 else 1.0 - alpha ** num_acc
-                        for i in range(len(self.all_subnets_all_entries)):
+                        for i in range(len(self.all_childnets_all_entries)):
                             self.downstreams[i].model.log_records(
                             train_split,
                             records = records[i],
@@ -616,30 +619,32 @@ class Runner():
                             smoothed_value[i] = last[i] / debias_weight
                         print("smoothed_value : ", smoothed_value)
                         batch_ids = []
-                        records = [defaultdict(list) for j in range(len(self.all_subnets_all_entries))]                  
+                        records = [defaultdict(list) for j in range(len(self.all_childnets_all_entries))]                  
 
 
-                    if pbar.n == strive_steps:    #选则最优的p
-                        if self.ob_mode == 'train':  # 根据train loss来选，实际没这么干了
+                    if pbar.n == strive_steps:    #choose the best child network
+                        if self.ob_mode == 'train':  # can also depend on smoothed  training loss to select the best childnet
                             min_idx = smoothed_value.index(min(smoothed_value))
-                        elif self.ob_mode == 'dev':   #根据开发集上的指标来选 
-                            can_val = [self.dev_score[-3], self.dev_score[-2], self.dev_score[-1]]   #分别对应3个模型的评分
+                        elif self.ob_mode == 'dev':   # default setting, depend on dev score
+                            can_val = [self.dev_score[-3], self.dev_score[-2], self.dev_score[-1]]   
                             if self.ob_target == 'wer' or self.ob_target == 'per' or self.ob_target == 'der':
-                                min_idx = can_val.index(min(can_val))   #选最小的
+                                min_idx = can_val.index(min(can_val))   # min is better
                             else:    #acc or f1
-                                min_idx = can_val.index(max(can_val))    #选最大的
-                        # 手动指定
+                                min_idx = can_val.index(max(can_val))    # max is better
+                        else:
+                            raise ValueError(f'ob_mode {self.ob_mode} not supported')
+                
                         #min_idx = 0    
                         self.upstream = self.upstreams[min_idx]
                         self.featurizer = self.featurizers[min_idx]
                         self.downstream = self.downstreams[min_idx]
-                        self.all_entries = self.all_subnets_all_entries[min_idx]
+                        self.all_entries = self.all_childnets_all_entries[min_idx]
                         trainable_paras = trainable_paras_list[min_idx]
                         optimizer = optimizers[min_idx]
                         scheduler = schedulers[min_idx]
                         records = records[min_idx]
                         
-                        for i in range(len(self.all_subnets_all_entries)):
+                        for i in range(len(self.all_childnets_all_entries)):
                             if i != min_idx:
                                 exec(f"del self.upstream_{i+1}")
                                 exec(f"del self.featurizer_{i+1}")
@@ -859,9 +864,8 @@ class Runner():
 
     def strive_evaluate(self, upstream, featurizer, downstream, all_entries, split=None, logger=None, global_step=0):
         """evaluate function will always be called on a single process even during distributed training"""
-        print('--------------------------------------------------', split)
-        if 'dev' not in split:
-            raise 
+        if 'dev' not in self.ob_mode:
+            return 
         # When this member function is called directly by command line
         not_during_training = split is None and logger is None and global_step == 0
         if not_during_training:
@@ -915,7 +919,7 @@ class Runner():
             batch_ids = batch_ids,
             total_batch_num = len(dataloader),
         )
-        if self.ob_mode == 'dev' and split in 'dev':
+        if self.ob_mode == 'dev':
             self.dev_score.append(torch.FloatTensor(records[self.ob_target]).mean().item())
             print('cur dev_score : ', self.dev_score)
         batch_ids = []
