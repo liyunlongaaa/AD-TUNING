@@ -14,7 +14,7 @@ runner:
 optimizer:
   name: ChildnetAdamW
   reserve_p: [0.1, 0.01, 0.001]
-  lr: 3.0e-4
+  lr: 5.0e-4
 
 # comment the whole scheduler config block
 # to disable learning rate scheduling
