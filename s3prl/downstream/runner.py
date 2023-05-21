@@ -595,7 +595,8 @@ class Runner():
                             strive_bar.update(1)
                         
                         if pbar.n == strive_steps:  #when elimination stage end, record the performance of each model on the development set
-                            self.strive_evaluate(self.upstreams[i], self.featurizers[i], self.downstreams[i], self.all_childnets_all_entries[i], self.config['runner']['eval_dataloaders'][0], logger, global_step)  #usully, config['runner']['eval_dataloaders'][0] is dev or dev-clean(asr) in s3prl，so we use [0] to index instead of 'dev。
+                            save_names = []
+                            save_names += self.strive_evaluate(self.upstreams[i], self.featurizers[i], self.downstreams[i], self.all_childnets_all_entries[i], self.config['runner']['eval_dataloaders'][0], logger, global_step)  #usully, config['runner']['eval_dataloaders'][0] is dev or dev-clean(asr) in s3prl，so we use [0] to index instead of 'dev。
 
                     # logging
                     if global_step % self.config['runner']['log_step'] == 0:
@@ -654,6 +655,28 @@ class Runner():
                         optim_p = self.config['optimizer']['reserve_p'][min_idx]
                         print(f"selete p => {self.config['optimizer']['reserve_p'][min_idx]}")    #choose
 
+                        all_states = {
+                            'Optimizer': optimizer.state_dict(),
+                            'Step': global_step,
+                            'Epoch': epoch,
+                            'Args': self.args,
+                            'Config': self.config,
+                            'Optim_p': optim_p
+                        }
+
+                        for entry in self.all_entries:
+                            if entry.trainable:
+                                all_states[entry.name] = get_model_state(entry.model)
+
+                        if scheduler:
+                            all_states['Scheduler'] = scheduler.state_dict()
+
+                        if is_initialized():
+                            all_states['WorldSize'] = get_world_size()
+                        save_name = os.path.join(self.args.expdir, save_names[0])
+                        tqdm.write(f'[Runner] - Save the checkpoint to:')
+                        tqdm.write(f'{save_name}')
+                        torch.save(all_states, save_name)
                             
                 else:
                     try:
@@ -733,7 +756,6 @@ class Runner():
 
                     # evaluation and save checkpoint
                     save_names = []
-
                     if global_step % self.config['runner']['eval_step'] == 0:
                         for split in self.config['runner']['eval_dataloaders']:
                             save_names += self.evaluate(split, logger, global_step)
@@ -937,8 +959,8 @@ class Runner():
         if not_during_training:
             logger.close()
             shutil.rmtree(tempdir)
-
         
+        return [] if type(save_names) is not list else save_names
     
     def inference(self):
         filepath = Path(self.args.evaluate_split)

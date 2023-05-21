@@ -1,5 +1,5 @@
 tqdm >=4.56.0
-numpy >=1.21
+numpy <1.24
 PyYAML >=5.4.1
 filelock
 omegaconf >=2.1.1
