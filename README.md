@@ -29,3 +29,15 @@ bash run.sh > log.txt
 ```
 
 More information (about data, config, training and inference) can be refered to [here](https://github.com/s3prl/s3prl/blob/main/s3prl/downstream/docs/superb.md)
+
+### Acknowledge
+We study many useful projects in our codeing process, which includes:
+
+
+[https://github.com/alibaba/AliceMind/tree/main/ChildTuning](https://github.com/alibaba/AliceMind/tree/main/ChildTuning)
+
+
+[https://github.com/s3prl/s3prl](https://github.com/s3prl/s3prl)
+
+
+Thanks for these authors to open source their code!
