@@ -41,3 +41,25 @@ We study many useful projects in our codeing process, which includes:
 
 
 Thanks for these authors to open source their code!
+
+if you find this repo is useful to your research, please cite:
+
+```bibtex
+@inproceedings{yang23n_interspeech,
+  author={Gaobin Yang and Jun Du and Maokui He and Shutong Niu and Baoxiang Li and Jiakui Li and Chin-Hui Lee},
+  title={{AD-TUNING: An Adaptive CHILD-TUNING Approach to Efficient Hyperparameter Optimization of Child Networks for Speech Processing Tasks in the SUPERB Benchmark}},
+  year=2023,
+  booktitle={Proc. INTERSPEECH 2023},
+  pages={421--425},
+  doi={10.21437/Interspeech.2023-1167}
+}
+
+@inproceedings{yang21c_interspeech,
+  author={Shu-wen Yang and Po-Han Chi and Yung-Sung Chuang and Cheng-I Jeff Lai and Kushal Lakhotia and Yist Y. Lin and Andy T. Liu and Jiatong Shi and Xuankai Chang and Guan-Ting Lin and Tzu-Hsien Huang and Wei-Cheng Tseng and Ko-tik Lee and Da-Rong Liu and Zili Huang and Shuyan Dong and Shang-Wen Li and Shinji Watanabe and Abdelrahman Mohamed and Hung-yi Lee},
+  title={{SUPERB: Speech Processing Universal PERformance Benchmark}},
+  year=2021,
+  booktitle={Proc. Interspeech 2021},
+  pages={1194--1198},
+  doi={10.21437/Interspeech.2021-1775}
+}
+
